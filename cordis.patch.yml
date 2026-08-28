@@ -1,0 +1,21 @@
+# dsh-plugin-better-plan bundle layer: inserts the plugin row.
+# Loaded by `dsh plugin --profile <name> add @huanlin/dsh-plugin-better-plan`.
+# The `name` is the package entry; the Loader resolves it from profile node_modules.
+#
+# The plugin SHADOWS the built-in `exit_plan_mode` per agent (same tool name,
+# per-agent scoped registration via `agent/session-start` → `agent.ctx`), so the
+# built-in plan-mode row in every agent preset stays mounted and untouched — its
+# `plan:policy` section, `/plan` command, projection and composer badge keep
+# working; only the delivery tool is replaced.
+#
+# Config (defaults shown; all fields optional):
+#   planDir      — plan-directory suggestion interpolated into the tool
+#                  description (e.g. `docs/plans`).
+#   maxPlanBytes — read cap of one plan file; larger files are refused with
+#                  guidance to trim the plan.
+- insert:
+    - id: better-plan
+      name: '@huanlin/dsh-plugin-better-plan'
+      config:
+        planDir: docs/plans
+        maxPlanBytes: 262144

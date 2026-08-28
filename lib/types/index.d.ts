@@ -1,0 +1,53 @@
+/**
+ * @huanlin/dsh-plugin-better-plan — replaces the built-in plan mode's plan
+ * DELIVERY while keeping everything else about plan mode intact.
+ *
+ * The model writes the complete plan to a markdown file (guided by the tool
+ * description) and calls the same-name `exit_plan_mode` with its path. This
+ * plugin registers that same-name tool into EVERY agent's scope at
+ * `agent/session-start` (`agent.ctx.tools.register`) — per-agent scoped
+ * registrations shadow the preset-mounted built-in across scope layers, so
+ * the built-in plan-mode plugin stays mounted and untouched (its `plan:policy`
+ * section, `/plan` command, projection, and composer badge keep working).
+ *
+ * Delivery pipeline (execute): validate plan mode → resolve the path against
+ * the session cwd → stat/read with a byte cap → enqueue a push on the
+ * per-session delivery registry (consumed by the `/better-plan/ws/delivery`
+ * WebSocket when a sidebar view is attached) → ask the SAME plan-review
+ * question the built-in tool asks, with a compact pointer as the detail when
+ * the push was delivered and the full plan text otherwise (D3: without the
+ * sidebar the user still reviews the plan on the card).
+ *
+ * Approval queueing the mode flip: the preset realm's `planMode` service is
+ * invisible to this plugin, so the approved `plan/mode: false` append is
+ * deferred to the next accepted `agent/pre-step` boundary here — the same
+ * mechanism the built-in controller uses (the tool result is the narration).
+ *
+ * @module @huanlin/dsh-plugin-better-plan
+ */
+import type { Context } from './context.ts';
+import { type BetterPlanConfig } from './config.ts';
+import { PlanDeliveryRegistry } from './delivery-registry.ts';
+export declare const name = "dsh-plugin-better-plan";
+/**
+ * Services required before mounting: the tool registry (its availability
+ * gates scoped registrations) and the webserver (the delivery push route).
+ */
+export declare const inject: string[];
+/** Loader schema (schemastery, strict) — validated by the cordis Loader. */
+export { Config } from './config.ts';
+export type { BetterPlanConfig } from './config.ts';
+/**
+ * Wire the plugin onto a host context. Everything this registers is bound to
+ * `ctx`'s own fiber and cleans up on disposal (HMR-safe).
+ * @param ctx - the host plugin context.
+ * @param config - the resolved plugin config.
+ * @returns the created delivery registry (exposed for tests).
+ */
+export declare function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDeliveryRegistry;
+/**
+ * Plugin entry.
+ * @param ctx - the host plugin context.
+ * @param config - the composition entry config (defaults fill in via the schema).
+ */
+export declare function apply(ctx: Context, config?: Partial<BetterPlanConfig>): void;

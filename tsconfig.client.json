@@ -1,0 +1,5 @@
+{
+  "//": "Client-face typecheck: the browser half only (src/client). Keeps the host-only Node types (node:fs, node:http) out of the client declaration graph so the shipped client .d.ts stays browser-safe.",
+  "extends": "./tsconfig.json",
+  "include": ["src/client"]
+}

@@ -40,18 +40,16 @@ import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { BetterPlanConfig } from './config.ts'
 import type { Context } from './context.ts'
 import type { PlanDeliveryRegistry } from './delivery-registry.ts'
+import {
+  approvalSteerText, keepPlanningSteerText, localizedRenderContent, planReviewCopy,
+  type PlanLocale,
+} from './locale.ts'
 import type { PlanReviewGate } from './review-gate.ts'
 import { basenameOf, firstHeading } from './first-heading.ts'
 import { resolveSessionCwd } from './resolve-cwd.ts'
 
 /** The review question's id, echoed in the answer this tool reads. */
 export const REVIEW_ID = 'plan-review'
-
-/** The review question's approve option label (the built-in wording). */
-export const APPROVE_LABEL = 'Approve'
-
-/** The review question's keep-planning option label (the built-in wording). */
-export const KEEP_PLANNING_LABEL = 'Keep planning'
 
 /**
  * The canonical tool value: `pending` = the plan reached the sidebar and the
@@ -62,21 +60,6 @@ export const KEEP_PLANNING_LABEL = 'Keep planning'
 export interface ExitPlanValue {
   delivered: boolean
   decision: 'pending' | 'approved'
-}
-
-/** The steer message fired when the sidebar approval lands. */
-export const APPROVAL_STEER_TEXT =
-  '[Plan review] The user approved the plan in the sidebar plan panel. Plan mode is now off — carry out the plan starting with this step.'
-
-/**
- * The steer message fired when the sidebar keeps planning.
- * @param feedback - the user's optional feedback (already trimmed).
- * @returns the steer text.
- */
-export function keepPlanningSteerText(feedback: string | undefined): string {
-  return '[Plan review] The user chose to keep planning after reviewing the plan in the sidebar plan panel.'
-    + (feedback === undefined ? '' : ` Their feedback: ${feedback}.`)
-    + ' Stay in plan mode: revise the plan file and present it again with exit_plan_mode.'
 }
 
 /**
@@ -107,8 +90,11 @@ export function reviewDetail(plan: string): string {
 }
 
 /**
- * The model-facing render. The pending branch IS the end-of-turn contract:
- * the conversation stops because the model stops here.
+ * The model-facing render — the ENGLISH baseline. The pending branch IS the
+ * end-of-turn contract: the conversation stops because the model stops here.
+ * A non-English session locale swaps this content at finalize time (see
+ * `finalizeContent` below); the baseline stays English so the durable result
+ * and every test anchor remain stable.
  */
 function renderResult(args: { path: string }, value: ExitPlanValue): { type: 'text'; text: string }[] {
   if (value.decision === 'pending') {
@@ -135,6 +121,11 @@ export interface ShadowToolDeps {
   registry: PlanDeliveryRegistry
   /** The sidebar review gate (records the pending decision + handlers). */
   reviewGate: PlanReviewGate
+  /**
+   * The session's resolved locale for user-facing copy (config override →
+   * sidebar-reported → en). Model-contract text never localizes.
+   */
+  localeOf: (sessionId: string | undefined) => PlanLocale
   /** Whether the plugin fiber was disposed while a review may be pending. */
   isDisposed: () => boolean
   /** Queue the approved mode flip for the next accepted pre-step boundary. */
@@ -179,6 +170,20 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       },
       render: renderResult,
     },
+    // Locale seam: swap the render content for a non-English session at
+    // materialization time (the render baseline above stays English).
+    // Errors keep the English guidance (model contract) — return undefined.
+    finalizeContent: (exec, result) => {
+      const agent = exec.agent
+      if (agent === undefined || result.isError) return undefined
+      const value = result.value as Partial<ExitPlanValue> | undefined
+      if (value === null || typeof value !== 'object') return undefined
+      const locale = deps.localeOf(agent.session.id)
+      if (locale === 'en') return undefined
+      const args = exec.arguments as { path?: unknown } | undefined
+      const path = typeof args?.path === 'string' ? args.path : ''
+      return localizedRenderContent(path, value, locale)
+    },
     execute: async (args: { path: string }, exec) => {
       exec.signal.throwIfAborted()
       const agent = exec.agent
@@ -219,6 +224,8 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       if (delivered) {
         // Sidebar review: return immediately (the render ends the turn) and
         // steer the decision back when the user makes it in the plan panel.
+        // The steer copy resolves at decide() time — the locale the view
+        // reported may arrive (or change) after this call returns.
         deps.reviewGate.begin(sessionId, { id, path: absolute, title }, {
           onApprove: () => {
             // Between turns the append lands immediately (the built-in
@@ -232,13 +239,13 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
               deps.onApproved(agent.session)
             }
             agent.steer(createUserMessage({
-              content: [{ type: 'text' as const, text: APPROVAL_STEER_TEXT }],
+              content: [{ type: 'text' as const, text: approvalSteerText(deps.localeOf(sessionId)) }],
               source: { kind: 'user' as const },
             }))
           },
           onKeep: (feedback) => {
             agent.steer(createUserMessage({
-              content: [{ type: 'text' as const, text: keepPlanningSteerText(feedback) }],
+              content: [{ type: 'text' as const, text: keepPlanningSteerText(feedback, deps.localeOf(sessionId)) }],
               source: { kind: 'user' as const },
             }))
           },
@@ -249,19 +256,23 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       if (interaction === undefined) {
         throw new Error('no user-questions channel is available to review the plan; ask the user to switch the session mode instead')
       }
+      // The popup is user-visible: resolve the question copy in the session's
+      // locale. The labels pair with the ask intent so the plan-review
+      // takeover matches the approve option by label.
+      const copy = planReviewCopy(deps.localeOf(sessionId))
       const answer = await interaction.ask({
         questions: [{
           id: REVIEW_ID,
-          header: 'Plan review',
-          question: 'Approve this plan and leave plan mode?',
+          header: copy.header,
+          question: copy.question,
           detail: reviewDetail(plan),
           options: [
-            { label: APPROVE_LABEL, description: 'Leave plan mode; the plan is carried out from the next step.' },
-            { label: KEEP_PLANNING_LABEL, description: 'Stay in plan mode; feedback goes back to the model.' },
+            { label: copy.approveLabel, description: copy.approveDescription },
+            { label: copy.keepLabel, description: copy.keepDescription },
           ],
           // Presentation only: a capable UI renders the review decision; the
           // answer encoding is identical either way.
-          intent: { kind: 'plan-review', approve: APPROVE_LABEL },
+          intent: { kind: 'plan-review', approve: copy.approveLabel },
         }],
         agent,
         signal: exec.signal,
@@ -283,7 +294,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       }
       const reviewItems = answer.answers.filter(entry => entry.id === REVIEW_ID)
       const item = reviewItems.length === 1 ? reviewItems[0] : undefined
-      if (item?.selected.length !== 1 || item.selected[0] !== APPROVE_LABEL || item.custom !== undefined) {
+      if (item?.selected.length !== 1 || item.selected[0] !== copy.approveLabel || item.custom !== undefined) {
         const feedback = item?.custom ?? ''
         throw new Error(feedback === ''
           ? 'The user chose to keep planning; revise the plan file and present it again.'
@@ -299,7 +310,9 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       card: 'generic',
       // Call-time projection is pure (C9): the plan file is not read here, so
       // the card titles by the file basename; the sidebar tab carries the
-      // plan's first heading instead.
+      // plan's first heading instead. Host-local only — the built-in web
+      // client derives its cards from the raw call and result content, so
+      // this projection stays locale-neutral English.
       title: basenameOf(args.path),
       kind: 'other',
       content: [{
@@ -309,6 +322,8 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
     }),
     presentResult: (_args, result) => ({
       card: 'generic',
+      // Host-local only (see presentCall); the content it wraps is already
+      // locale-finalized.
       title: 'Plan review',
       content: result.content,
     }),

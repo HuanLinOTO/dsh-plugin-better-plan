@@ -21,6 +21,7 @@ import { createElement, useCallback, useEffect, useState, useSyncExternalStore }
 import type { ComponentProps } from 'react'
 import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TabComponentProps } from 'dsh-better-sidebar/client/service'
+import { t } from './locales.ts'
 import { markdownTextProps } from './markdown-props.ts'
 import { fetchReviewState, reviewStore, submitReviewDecision } from './review-store.ts'
 
@@ -64,10 +65,10 @@ async function fsRead(sessionId: string, path: string, signal?: AbortSignal): Pr
   }
   const value = parsed.value as { kind?: unknown; content?: unknown; truncated?: unknown }
   if (value.kind === 'binary') {
-    throw new Error('the plan file is binary; review it in the editor instead')
+    throw new Error(t('binaryFile'))
   }
   if (typeof value.content !== 'string') {
-    throw new Error('unexpected fs.read response')
+    throw new Error(t('unexpectedRead'))
   }
   return { content: value.content, truncated: value.truncated === true }
 }
@@ -121,8 +122,8 @@ const styles: Record<string, ComponentProps<'div'>['style']> = {
 
 /** The one-line status a settled review renders (cancelled stays quiet). */
 function settledReviewText(status: 'approved' | 'kept' | 'cancelled'): string | null {
-  if (status === 'approved') return 'Plan approved — the model is carrying out the plan.'
-  if (status === 'kept') return 'Feedback sent — the model is revising the plan.'
+  if (status === 'approved') return t('approvedStatus')
+  if (status === 'kept') return t('keptStatus')
   return null
 }
 
@@ -160,7 +161,7 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
 
   useEffect(() => {
     if (path === undefined) {
-      setLoad({ status: 'error', message: 'this plan tab carries no file path' })
+      setLoad({ status: 'error', message: t('noPath') })
       return
     }
     const controller = new AbortController()
@@ -206,10 +207,10 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
             ? createElement('button', {
                 style: styles.button,
                 onClick: () => { betterSidebar.openFile(scope, path) },
-              }, 'Open in editor')
+              }, t('openInEditor'))
             : null,
           path !== undefined
-            ? createElement('button', { style: styles.button, onClick: copyPath }, copied ? 'Copied' : 'Copy path')
+            ? createElement('button', { style: styles.button, onClick: copyPath }, copied ? t('copied') : t('copyPath'))
             : null,
         ),
       ),
@@ -218,12 +219,12 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
     pendingReview !== null
       ? createElement('div', { style: styles.reviewBar },
           createElement('div', { style: styles.reviewText },
-            'Review this plan here — the chat shows no approval popup. Approve to leave plan mode, or keep planning with feedback.',
+            t('reviewHint'),
           ),
           createElement('input', {
             style: styles.reviewInput,
             value: feedback,
-            placeholder: 'Optional feedback for "Keep planning"…',
+            placeholder: t('feedbackPlaceholder'),
             onChange: (event: { target: { value: string } }) => { setFeedback(event.target.value) },
           }),
           createElement('div', { style: styles.reviewButtons },
@@ -231,12 +232,12 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
               style: styles.primaryButton,
               disabled: submitting,
               onClick: () => { decide('approve') },
-            }, 'Approve'),
+            }, t('approve')),
             createElement('button', {
               style: styles.button,
               disabled: submitting,
               onClick: () => { decide('keep') },
-            }, 'Keep planning'),
+            }, t('keepPlanning')),
           ),
           submitError !== undefined ? createElement('div', { style: styles.reviewError }, submitError) : null,
         )
@@ -244,24 +245,24 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
         ? createElement('div', { style: styles.reviewStatus }, settledReview)
         : null,
     load.status === 'loading'
-      ? createElement('div', { style: styles.notice }, 'Loading plan…')
+      ? createElement('div', { style: styles.notice }, t('loading'))
       : load.status === 'error'
         ? createElement('div', { style: styles.notice },
-            createElement('div', null, `Failed to read the plan: ${load.message}`),
+            createElement('div', null, `${t('readFailed')}: ${load.message}`),
             path !== undefined
               ? createElement('button', {
                   style: { ...styles.button, marginTop: 8 },
                   onClick: () => { setAttempt(attempt + 1) },
-                }, 'Retry')
+                }, t('retry'))
               : null,
           )
         : createElement('div', { style: styles.body },
             createElement(MarkdownText, {
-              ...markdownTextProps(load.content, { copyLabel: 'Copy', copiedLabel: 'Copied' }),
+              ...markdownTextProps(load.content, { copyLabel: t('copy'), copiedLabel: t('copiedLabel') }),
             }),
             load.truncated
               ? createElement('div', { style: { ...styles.notice, paddingLeft: 0, paddingRight: 0 } },
-                  'The file was truncated by the sidebar read limit; open it in the editor for the rest.',
+                  t('truncated'),
                 )
               : null,
           ),

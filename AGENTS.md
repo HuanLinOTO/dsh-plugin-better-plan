@@ -41,7 +41,7 @@ foreach ($k in $links.Keys) {
 
 ```sh
 pnpm run typecheck    # tsc --noEmit ×2（tsconfig.json host+tests 面、tsconfig.client.json 纯 client 面）
-pnpm test             # vitest run（13 个 spec 文件）
+pnpm test             # vitest run（14 个 spec 文件）
 pnpm run build        # tsdown（host ESM + client CJS closure）+ tsc -p tsconfig.build.json → lib/
 pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 ```
@@ -52,7 +52,8 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 - **提示词面覆盖**：preset 的 `plan:policy` 段落教原版内联契约且禁写文件，与工具契约冲突 → `registerPlanPolicyOverride` 把 `system-prompt/assemble` waterfall 监听器**逐 agent 注册在 `agent.ctx`**。assemble 派发 key = agent 本身（`assembleContextFor` 返回 `{ agent, scope: agent }`），scope 链准入只向上流——挂在插件 fiber 上的注册会被过滤，**不要「简化」成全局注册**（有测试固化该约束）。改写是锚点句子替换（幂等、缺锚跳过，兼容 preset 变体），共四处：交付句 → **同回合两步强制契约**（先写 `docs/plans/YYYY-MM-DD-<topic>.md`，日期+kebab-case 主题命名，紧跟 exit 调用；「写文件只是准备，写完不调工具 = 什么都没呈现」）；**原版「exit_plan_mode 是该回合唯一且最后的工具调用」句（`FINAL_CALL_ANCHOR`）必须一并改写**——文件先行下 write 先于 exit，该句原样保留会被模型读成「本回合不许再调工具」，正是「光 write 不 exit」的根因；写禁句与规则压治句各带豁免。锚点出现 ⇔ 计划模式激活，无需自管状态。
 - **模式切换**：preset isolate realm 的 `planMode` 服务对 agent ctx 不可见，不能调原版控制器。两条批准路径分工：**侧边栏批准**是回合间决定——直接 append `plan/mode: { active: false }`（与原版控制器空闲时行为一致），append 失败退回 `pendingExits` 记账由下个边界重试；**弹窗降级路径**的批准发生在回合内——仍走 `pendingExits` + 下一个被接受的 `agent/pre-step` 边界 append（WeakSet 记账、失败保留重试）。
 - **审批门（侧边栏审批面）**：推送 `delivered: true` 时 execute **不调 `userQuestions.ask`**（无聊天弹窗）、也**不阻塞**——立即返回 `decision: 'pending'`，render 指示模型结束回合（对话停止 = 模型停止调工具；阻塞工具只会留一张永远「运行中」的卡片，**不要改回停靠等待**）。`review-gate.begin(sessionId, review, handlers)` 只记录待决 + 广播 pending 帧；`decide()`（`POST /better-plan/api/review` 触发）结算状态并触发 handlers——`onApprove` 落模式翻转 + `agent.steer`（**空闲 driver 直接开新回合**，运行中则最近 step 注入）、`onKeep` 经 steer 带回反馈。 steer 消息用 `createUserMessage({ source: { kind: 'user' } })`（`/plan` 命令同款）。陈旧 `id` 守卫（409）防多窗口旧窗口误结算新计划；`dispose()` 结算 cancelled 且不触发 handlers。`delivered: false` 永远走原版 ask 弹窗——不要「统一」成 gate，无侧边栏环境会失去审批能力。
-- **client 半纯度门**：client bundle 禁止 value-import 其他插件/宿主内部模块。better-sidebar 的交互全部走 `ctx.betterSidebar` 方法；`markdownTextProps` 双形状逻辑内联在 `src/client/markdown-props.ts`（勿改成 import）。
+- **i18n（用户文案双面、模型契约恒英文）**：本地化只覆盖**用户可见面**——宿主端（交付 render 文本经工具 `finalizeContent` 接缝替换、steer 消息在 decide 时刻解析、无侧边栏审批弹窗 copy；approve 匹配用 `copy.approveLabel` 与 ask intent 同源配对，本地化标签不会破坏 plan-review takeover 的按 label 匹配）与 client 端（PlanView 文案走 `client/locales.ts` 的 `t()`，词典注册进 DSH 共享 locale 注册表 `betterPlan` 命名空间，跟随 Host-backed `locale.preference` 实时切换；better-sidebar 的 tab-content memo 以 localeRevision 为键，切语言自动重渲染）。locale 解析链：config `locale`（≠ auto 强制）→ `LocaleDirectory` 视图上报（WS connect 查询参数 + review GET/POST 携带浏览器当前 DSH 语言）→ `'en'`。**模型契约文本永远英文**（description、plan:policy 改写、execute 错误指引）——不要「顺手」本地化它们。审批路由错误带稳定 `code`（`no_pending`/`stale_review`/…），client 按 code 映射、未知 code 回退原文。render 基线恒英文（finalize 只在非 en 会话替换），测试锚点稳定。
+- **client 半纯度门**：client bundle 禁止 value-import 其他插件/宿主内部模块。better-sidebar 的交互全部走 `ctx.betterSidebar` 方法；`markdownTextProps` 双形状逻辑内联在 `src/client/markdown-props.ts`（勿改成 import）。`ctx.locale` 只需 type-only import（`@deepseek-ai/dsh-client-locale/client`）拉 Context merge——运行时经 context proxy 取服务，无 value import。
 - **updateTab 序列**：`single: true` 的 dedupe 聚焦不覆写已开 tab 的 path，重复交付必须紧跟 `updateTab`（`features.includes('updateTab')` gate）+ `activateTab`。`meta.path` 随 tab 持久化，刷新后 PlanView 按 `meta.path` 重读。
 - **文件读取走 better-sidebar 路由**：PlanView 用 `POST /sidebar/api/fs.read`（同源、浏览器已鉴权）；本插件不建自有 HTTP 读路由。
 - **WS 栅栏**：`/better-plan/ws/delivery` 过 `isTrustedDeliveryRequest`（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname）。`webRuntime` 为 optional 注入（`ctx.get`），缺席时仅回环可连。
@@ -62,9 +63,10 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 | 文件 | 职责 |
 |------|------|
 | `src/index.ts` | host 入口：遮蔽挂接（工具 + 提示词面）、pre-step flush、WS/HTTP 路由注册、service lifetime |
-| `src/shadow-tool.ts` | 工具契约全部面：description / parameters / output schema+render / execute / presentCall / presentResult |
+| `src/shadow-tool.ts` | 工具契约全部面：description / parameters / output schema+render / finalizeContent（本地化接缝）/ execute / presentCall / presentResult |
+| `src/locale.ts` | locale 词表 + 会话级解析链（`LocaleDirectory` 视图上报 + config 覆盖 → en 兜底）+ 宿主端双语文案（render 文本 / steer 消息 / 审批弹窗 copy） |
 | `src/review-gate.ts` | 审批门：per-session 待决记录 + `begin`（记录+广播）/`decide`（结算+触发 handlers）/`peek`/attach 回放/dispose |
-| `src/review-route.ts` | `/better-plan/api/review`：GET 引导当前状态 + POST 结算决定；信任栅栏 + 体校验（4KB 上限）+ 陈旧 id 守卫 |
+| `src/review-route.ts` | `/better-plan/api/review`：GET 引导当前状态 + POST 结算决定；信任栅栏 + 体校验（4KB 上限）+ 陈旧 id 守卫；错误响应带稳定 `code`；双动词都记录视图上报 locale |
 | `src/prompt-override.ts` | `plan:policy` 段落锚点改写（`rewritePlanPolicySection`）+ assemble waterfall 注册（`registerPlanPolicyOverride`） |
 | `src/delivery-registry.ts` | per-session 推送队列（上限 8、consume-on-send、attach 回放） |
 | `src/ws-route.ts` | `/better-plan/ws/delivery` 升级注册 + tagged 帧（`deliver`/`review`）+ `attachDeliverySocket`（registry + gate 双 attach） |
@@ -72,9 +74,10 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 | `src/resolve-cwd.ts` | header → persistence → process.cwd 解析链 |
 | `src/first-heading.ts` | 原版同款首 heading 正则 + basename |
 | `src/context.ts` | Context 结构化 face（intersection，勿改 augmentation） |
-| `src/client/index.tsx` | Plan tab 注册 + 交付 WS 订阅（会话切换重连、失败退避）+ tagged 帧分发（`applyDeliveryFrame`） |
-| `src/client/PlanView.tsx` | 面板组件 + 审批动作栏 + `planPathOf` + fs.read 封装 |
-| `src/client/review-store.ts` | 审批状态外部 store + `submitReviewDecision`（POST 回宿主端并 echo） |
+| `src/client/index.tsx` | Plan tab 注册 + 词典注册（`ctx.locale.register('betterPlan', …)`）+ 交付 WS 订阅（会话切换重连、失败退避，connect 携带 `locale` 上报）+ tagged 帧分发（`applyDeliveryFrame`） |
+| `src/client/PlanView.tsx` | 面板组件（文案全走 `t()`）+ 审批动作栏 + `planPathOf` + fs.read 封装 |
+| `src/client/locales.ts` | 面板双语词典（zh 源 + en key-set-equal）+ `attachLocale`/`t()`/`activeLocale` + 路由错误 `code` → 本地化文案映射 |
+| `src/client/review-store.ts` | 审批状态外部 store + `submitReviewDecision`（POST 回宿主端并 echo，携带 locale；错误按 code 本地化） |
 | `src/client/markdown-props.ts` | MarkdownText 双代 props（内联） |
 
 ## 已知约束

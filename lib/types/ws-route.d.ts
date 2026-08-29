@@ -12,6 +12,7 @@
  * @module @huanlin/dsh-plugin-better-plan/ws-route
  */
 import type { PlanDeliveryRegistry } from './delivery-registry.ts';
+import type { LocaleDirectory } from './locale.ts';
 import type { PlanReviewGate } from './review-gate.ts';
 import { type FenceRequest } from './trust-fence.ts';
 /** The exact upgrade path registered on the host webServer. */
@@ -27,22 +28,26 @@ export interface DeliverySocket {
     on(event: 'close' | 'error', listener: () => void): unknown;
 }
 /**
- * Wire one delivery socket to the registries: parse `?session=`, attach the
- * delivery queue (replaying queued pushes) and the review gate (replaying
- * the latest review state), and detach on close/error so later pushes queue
- * instead of accumulating on a dead socket.
+ * Wire one delivery socket to the registries: parse `?session=` (and the
+ * view-reported `?locale=`, recorded so the host's user-facing copy follows
+ * the browser's active DSH locale), attach the delivery queue (replaying
+ * queued pushes) and the review gate (replaying the latest review state),
+ * and detach on close/error so later pushes queue instead of accumulating
+ * on a dead socket.
  * @param registry - the delivery registry.
  * @param gate - the review gate.
  * @param ws - the connected socket.
  * @param req - the upgrade request.
+ * @param directory - the locale directory the reported locale is recorded in.
  */
-export declare function attachDeliverySocket(registry: PlanDeliveryRegistry, gate: PlanReviewGate, ws: DeliverySocket, req: DeliveryUpgradeRequest): void;
+export declare function attachDeliverySocket(registry: PlanDeliveryRegistry, gate: PlanReviewGate, ws: DeliverySocket, req: DeliveryUpgradeRequest, directory: LocaleDirectory): void;
 /**
  * Register the delivery upgrade route on the host webServer.
  * @param registerUpgrade - the webServer's route registrar.
  * @param registry - the delivery registry.
  * @param gate - the review gate.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  * @returns the route disposer.
  */
 export declare function registerDeliveryRoute(registerUpgrade: (route: {
@@ -50,4 +55,4 @@ export declare function registerDeliveryRoute(registerUpgrade: (route: {
     handler: (req: DeliveryUpgradeRequest, socket: {
         destroy(): void;
     }, head: Uint8Array) => void | Promise<void>;
-}) => () => void, registry: PlanDeliveryRegistry, gate: PlanReviewGate, trustedHosts: readonly string[]): () => void;
+}) => () => void, registry: PlanDeliveryRegistry, gate: PlanReviewGate, trustedHosts: readonly string[], directory: LocaleDirectory): () => void;

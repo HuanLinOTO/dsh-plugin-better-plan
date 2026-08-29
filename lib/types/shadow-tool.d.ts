@@ -33,13 +33,10 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import type { BetterPlanConfig } from './config.ts';
 import type { Context } from './context.ts';
 import type { PlanDeliveryRegistry } from './delivery-registry.ts';
+import { type PlanLocale } from './locale.ts';
 import type { PlanReviewGate } from './review-gate.ts';
 /** The review question's id, echoed in the answer this tool reads. */
 export declare const REVIEW_ID = "plan-review";
-/** The review question's approve option label (the built-in wording). */
-export declare const APPROVE_LABEL = "Approve";
-/** The review question's keep-planning option label (the built-in wording). */
-export declare const KEEP_PLANNING_LABEL = "Keep planning";
 /**
  * The canonical tool value: `pending` = the plan reached the sidebar and the
  * decision comes later (the model must end its turn); `approved` = the
@@ -50,14 +47,6 @@ export interface ExitPlanValue {
     delivered: boolean;
     decision: 'pending' | 'approved';
 }
-/** The steer message fired when the sidebar approval lands. */
-export declare const APPROVAL_STEER_TEXT = "[Plan review] The user approved the plan in the sidebar plan panel. Plan mode is now off \u2014 carry out the plan starting with this step.";
-/**
- * The steer message fired when the sidebar keeps planning.
- * @param feedback - the user's optional feedback (already trimmed).
- * @returns the steer text.
- */
-export declare function keepPlanningSteerText(feedback: string | undefined): string;
 /**
  * The model-facing description. The model's only new knowledge: the
  * file-first contract, the immediate-return + end-turn contract, and the
@@ -85,6 +74,11 @@ export interface ShadowToolDeps {
     registry: PlanDeliveryRegistry;
     /** The sidebar review gate (records the pending decision + handlers). */
     reviewGate: PlanReviewGate;
+    /**
+     * The session's resolved locale for user-facing copy (config override →
+     * sidebar-reported → en). Model-contract text never localizes.
+     */
+    localeOf: (sessionId: string | undefined) => PlanLocale;
     /** Whether the plugin fiber was disposed while a review may be pending. */
     isDisposed: () => boolean;
     /** Queue the approved mode flip for the next accepted pre-step boundary. */

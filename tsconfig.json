@@ -32,6 +32,7 @@
       "@deepseek-ai/dsh-tools": ["C:/Users/Administrator/.dsh/source/current/packages/core/tools/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-plan-mode": ["C:/Users/Administrator/.dsh/source/current/packages/plan/plan-mode/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-questions": ["C:/Users/Administrator/.dsh/source/current/packages/interaction/user-questions/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["C:/Users/Administrator/.dsh/source/current/packages/client/locale/lib/types/client/index.d.ts"],
       "dsh-better-sidebar": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/index.d.ts"],
       "dsh-better-sidebar/client": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/client/index.d.ts"],
       "dsh-better-sidebar/client/service": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/client/service.d.ts"],

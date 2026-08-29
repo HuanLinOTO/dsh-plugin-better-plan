@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { LocaleDirectory } from '../src/locale.ts'
 import { PlanReviewGate } from '../src/review-gate.ts'
 import {
   REVIEW_API_PATH,
@@ -40,22 +41,24 @@ function fakeResponse(): CapturedResponse {
   return response
 }
 
-async function post(gate: PlanReviewGate, body: unknown, headers?: Record<string, string>): Promise<CapturedResponse> {
+async function post(gate: PlanReviewGate, body: unknown, headers?: Record<string, string>, directory = new LocaleDirectory()): Promise<CapturedResponse> {
   const res = fakeResponse()
-  await handleReviewRequest(gate, fakeRequest(body, headers), res, [])
+  await handleReviewRequest(gate, fakeRequest(body, headers), res, [], directory)
   return res
 }
 
-async function get(gate: PlanReviewGate, url: string, headers: Record<string, string> = { host: '127.0.0.1:18080' }): Promise<CapturedResponse> {
+async function get(gate: PlanReviewGate, url: string, headers: Record<string, string> = { host: '127.0.0.1:18080' }, directory = new LocaleDirectory()): Promise<CapturedResponse> {
   const res = fakeResponse()
-  await handleReviewRequest(gate, { ...fakeRequest({}), method: 'GET', url, headers }, res, [])
+  await handleReviewRequest(gate, { ...fakeRequest({}), method: 'GET', url, headers }, res, [], directory)
   return res
 }
 
 describe('parseReviewDecisionBody', () => {
-  it('parses session + decision and keeps optional feedback/id', () => {
-    expect(parseReviewDecisionBody('{"session":"s1","decision":"keep","feedback":"f","id":"d1"}'))
-      .toEqual({ value: { session: 's1', decision: 'keep', feedback: 'f', id: 'd1' } })
+  it('parses session + decision and keeps optional feedback/id/locale', () => {
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"keep","feedback":"f","id":"d1","locale":"zh-CN"}'))
+      .toEqual({ value: { session: 's1', decision: 'keep', feedback: 'f', id: 'd1', locale: 'zh-CN' } })
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"approve"}'))
+      .toEqual({ value: { session: 's1', decision: 'approve' } })
   })
 
   it('rejects malformed JSON, non-objects, and invalid decisions', () => {
@@ -84,19 +87,23 @@ describe('handleReviewRequest', () => {
     expect(keeps).toEqual(['add tests'])
   })
 
-  it('answers 409 when nothing is pending', async () => {
+  it('answers 409 with a stable code when nothing is pending', async () => {
     const gate = new PlanReviewGate()
     const res = await post(gate, { session: 's1', decision: 'approve' })
     expect(res.status).toBe(409)
-    expect(JSON.parse(res.body ?? '{}').error).toBe('no plan review is pending for this session')
+    const parsed = JSON.parse(res.body ?? '{}')
+    expect(parsed.error).toBe('no plan review is pending for this session')
+    expect(parsed.code).toBe('no_pending')
   })
 
-  it('answers 409 on a stale delivery id (multi-window guard)', async () => {
+  it('answers 409 with a stable code on a stale delivery id (multi-window guard)', async () => {
     const gate = new PlanReviewGate()
     gate.begin('s1', REVIEW, NO_HANDLERS)
     const res = await post(gate, { session: 's1', decision: 'approve', id: 'stale' })
     expect(res.status).toBe(409)
-    expect(JSON.parse(res.body ?? '{}').error).toContain('stale')
+    const parsed = JSON.parse(res.body ?? '{}')
+    expect(parsed.error).toContain('stale')
+    expect(parsed.code).toBe('stale_review')
     // The pending review survives the stale click.
     expect(gate.peek('s1')?.id).toBe('d1')
   })
@@ -105,8 +112,20 @@ describe('handleReviewRequest', () => {
     const gate = new PlanReviewGate()
     expect((await post(gate, '{')).status).toBe(400)
     const res = fakeResponse()
-    await handleReviewRequest(gate, { ...fakeRequest({}), method: 'PUT' }, res, [])
+    await handleReviewRequest(gate, { ...fakeRequest({}), method: 'PUT' }, res, [], new LocaleDirectory())
     expect(res.status).toBe(405)
+  })
+
+  it('records the view-reported locale from both verbs', async () => {
+    const gate = new PlanReviewGate()
+    const directory = new LocaleDirectory()
+    await get(gate, `${REVIEW_API_PATH}?session=s1&locale=zh-CN`, undefined, directory)
+    expect(directory.known('s1')).toBe('zh')
+    await post(gate, { session: 's2', decision: 'approve', locale: 'en' }, undefined, directory)
+    expect(directory.known('s2')).toBe('en')
+    // Unsupported tags are ignored (the previous report stands).
+    await post(gate, { session: 's2', decision: 'approve', locale: 'xx-YY' }, undefined, directory)
+    expect(directory.known('s2')).toBe('en')
   })
 
   it('GET bootstraps the current review state for the plan panel', async () => {
@@ -147,6 +166,7 @@ describe('handleReviewRequest', () => {
       fakeRequest('x'.repeat(REVIEW_BODY_LIMIT + 1)),
       res,
       [],
+      new LocaleDirectory(),
     )
     expect(res.status).toBe(413)
   })

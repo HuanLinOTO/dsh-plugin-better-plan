@@ -12,6 +12,7 @@ import { createElement } from 'react'
 import { cleanup, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { PlanView, planPathOf } from '../../src/client/PlanView.tsx'
 import type { TabComponentProps } from 'dsh-better-sidebar/client/service'
+import { attachLocale } from '../../src/client/locales.ts'
 import { REVIEW_API_PATH, reviewStore } from '../../src/client/review-store.ts'
 
 vi.mock('@deepseek-ai/dsh-client-ui-primitives', () => ({
@@ -164,7 +165,7 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
     await screen.findByText('Plan approved — the model is carrying out the plan.')
     expect(vi.mocked(fetch).mock.calls.some(([url]) => url === REVIEW_API_PATH)).toBe(true)
     const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve', id: 'r1' })
+    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve', locale: 'en', id: 'r1' })
     // The echoed state cleared the buttons.
     expect(screen.queryByText('Approve')).toBeNull()
     expect(reviewStore.get()?.status).toBe('approved')
@@ -179,18 +180,28 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
     fireEvent.click(screen.getByText('Keep planning'))
     await screen.findByText('Feedback sent — the model is revising the plan.')
     const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'keep', feedback: 'add tests', id: 'r1' })
+    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'keep', locale: 'en', feedback: 'add tests', id: 'r1' })
   })
 
-  it('a failed decision keeps the bar up with the error line for a retry', async () => {
+  it('a failed decision keeps the bar up with the localized error line for a retry', async () => {
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
-    stubReviewFetch({ ok: false, error: 'no plan review is pending for this session' }, false)
+    stubReviewFetch({ ok: false, code: 'no_pending', error: 'no plan review is pending for this session' }, false)
     render(createElement(PlanView, tabProps()))
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Approve'))
-    await screen.findByText('no plan review is pending for this session')
+    // The route's stable code maps to the locale catalog (en in this jsdom).
+    await screen.findByText('No plan is awaiting review.')
     expect(screen.getByText('Approve')).toBeDefined()
     expect(reviewStore.get()?.status).toBe('pending')
+  })
+
+  it('an uncoded failure falls back to the prefix + raw message', async () => {
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: false, error: 'boom' }, false)
+    render(createElement(PlanView, tabProps()))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Approve'))
+    await screen.findByText('Submitting the decision failed: boom')
   })
 
   it('a review for a different path shows no bar on this tab', async () => {
@@ -200,5 +211,22 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
     await screen.findByTestId('markdown')
     expect(screen.queryByText(/Review this plan here/)).toBeNull()
     expect(screen.queryByText('Approve')).toBeNull()
+  })
+
+  it('follows the attached DSH locale: a zh service renders the Chinese copy', async () => {
+    attachLocale({ getSnapshot: () => ({ active: 'zh' }) })
+    try {
+      reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+      stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'approved' } })
+      render(createElement(PlanView, tabProps()))
+      expect(await screen.findByText(/在此审阅计划/)).toBeDefined()
+      fireEvent.click(screen.getByText('批准'))
+      await screen.findByText('计划已批准——模型正在执行该计划。')
+      // The decision POST reported the zh locale to the host.
+      const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
+      expect(JSON.parse(String(init.body)).locale).toBe('zh')
+    } finally {
+      attachLocale(undefined)
+    }
   })
 })

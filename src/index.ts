@@ -30,6 +30,12 @@
  * waterfall listener rewrites those sentences to the file-first contract on
  * every assembled prompt (see `prompt-override.ts`).
  *
+ * User-facing copy follows the session's locale (see `locale.ts`): the
+ * delivery render text (via the tool's `finalizeContent` seam), the steer
+ * messages, and the no-sidebar review question localize to the sidebar
+ * view's reported locale; the model contract (description, prompt rewrite,
+ * execute errors) stays English.
+ *
  * @module @huanlin/dsh-plugin-better-plan
  */
 
@@ -39,6 +45,7 @@ import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import type { Context } from './context.ts'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from './config.ts'
 import { PlanDeliveryRegistry } from './delivery-registry.ts'
+import { LocaleDirectory, resolvePlanLocale } from './locale.ts'
 import { PlanReviewGate } from './review-gate.ts'
 import { registerPlanPolicyOverride } from './prompt-override.ts'
 import { registerReviewRoute } from './review-route.ts'
@@ -89,9 +96,10 @@ function flushPendingExit(agent: Agent): boolean {
  * @param config - the resolved plugin config.
  * @returns the created delivery registry and review gate (exposed for tests).
  */
-export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { registry: PlanDeliveryRegistry; reviewGate: PlanReviewGate } {
+export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { registry: PlanDeliveryRegistry; reviewGate: PlanReviewGate; locales: LocaleDirectory } {
   const registry = new PlanDeliveryRegistry()
   const reviewGate = new PlanReviewGate()
+  const locales = new LocaleDirectory()
   let disposed = false
 
   // Register the shadowed delivery tool in every agent's scope. The effect
@@ -109,6 +117,7 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
         config,
         registry,
         reviewGate,
+        localeOf: (sessionId) => resolvePlanLocale(config.locale, locales, sessionId),
         isDisposed: () => disposed,
         onApproved: (session: object) => { pendingExits.add(session as Session) },
       })),
@@ -146,6 +155,7 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
       registry,
       reviewGate,
       ctx.get('webRuntime')?.trustedHosts ?? [],
+      locales,
     ),
     'dsh-plugin-better-plan: delivery WebSocket',
   )
@@ -157,6 +167,7 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
       (route) => ctx.webServer.register(route),
       reviewGate,
       ctx.get('webRuntime')?.trustedHosts ?? [],
+      locales,
     ),
     'dsh-plugin-better-plan: review API route',
   )
@@ -168,9 +179,10 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
     disposed = true
     registry.dispose()
     reviewGate.dispose()
+    locales.dispose()
   }, 'dsh-plugin-better-plan: service lifetime')
 
-  return { registry, reviewGate }
+  return { registry, reviewGate, locales }
 }
 
 /**

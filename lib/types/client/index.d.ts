@@ -47,7 +47,7 @@ export declare function applyDeliveryPush(service: BetterSidebarService, payload
  * @param sessionId - the session the socket is subscribed to.
  */
 export declare function applyDeliveryFrame(service: BetterSidebarService, store: ReviewStore, frame: unknown, sessionId: string): void;
-/** The betterSidebar service this half resolves through the context proxy. */
+/** The betterSidebar and locale services this half resolves through the context proxy. */
 export declare const inject: string[];
 /**
  * Client plugin body.

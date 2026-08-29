@@ -29,7 +29,11 @@ import type { Context } from '@deepseek-ai/cordis'
 // build time, so it never hits the client-bundle purity gate.
 import type {} from 'dsh-better-sidebar/client/service'
 import type { BetterSidebarService } from 'dsh-better-sidebar/client/service'
+// Type-only: pulls the DSH locale plugin's Context merge (ctx.locale) — the
+// Host-backed language preference every sidebar copy follows.
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { IconPlanOutline16 } from './icons.tsx'
+import { activeLocale, attachLocale, enDict, LOCALE_NS, t, zhDict } from './locales.ts'
 import { PlanView } from './PlanView.tsx'
 import { isReviewState, ReviewStore, reviewStore } from './review-store.ts'
 
@@ -90,8 +94,8 @@ export function applyDeliveryFrame(service: BetterSidebarService, store: ReviewS
   if (kind === 'deliver') applyDeliveryPush(service, frame, sessionId)
 }
 
-/** The betterSidebar service this half resolves through the context proxy. */
-export const inject = ['betterSidebar']
+/** The betterSidebar and locale services this half resolves through the context proxy. */
+export const inject = ['betterSidebar', 'locale']
 
 /**
  * Client plugin body.
@@ -101,10 +105,20 @@ export function apply(ctx: Context): void {
   const betterSidebar = ctx.betterSidebar
   if (betterSidebar === undefined) return
 
+  // Copy follows the DSH i18n system: register the plugin's dictionaries in
+  // the shared locale registry and point the module-level t() at the service
+  // (absent service → browser-language fallback inside locales.ts).
+  attachLocale(ctx.locale)
+  ctx.effect(() => {
+    const offZh = ctx.locale.register(LOCALE_NS, 'zh', zhDict)
+    const offEn = ctx.locale.register(LOCALE_NS, 'en', enDict)
+    return () => { offZh(); offEn() }
+  }, 'dsh-plugin-better-plan: locale dictionaries')
+
   ctx.effect(
     () => betterSidebar.registerTab({
       id: TAB_ID,
-      title: () => 'Plan',
+      title: () => t('tabTitle'),
       icon: (size: number) => createElement(IconPlanOutline16, { size }),
       // editor(10) 之后、git(20) 之前。
       order: 15,
@@ -134,7 +148,9 @@ export function apply(ctx: Context): void {
       socket?.close()
       const url = new URL(DELIVERY_WS_PATH, window.location.origin)
       url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
-      url.search = new URLSearchParams({ session: sessionId }).toString()
+      // The view reports its active locale on every (re)connect so the host's
+      // user-facing copy follows the browser's DSH language.
+      url.search = new URLSearchParams({ session: sessionId, locale: activeLocale() }).toString()
       socket = new WebSocket(url.toString())
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return

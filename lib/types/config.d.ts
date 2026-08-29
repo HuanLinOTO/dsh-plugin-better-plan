@@ -8,6 +8,7 @@
  *
  * @module @huanlin/dsh-plugin-better-plan/config
  */
+import type { LocaleSetting } from './locale.ts';
 /** Deployment-tunable configuration for the better-plan plugin. */
 export interface BetterPlanConfig {
     /**
@@ -20,14 +21,25 @@ export interface BetterPlanConfig {
      * to trim the plan, so an unbounded write cannot flood the review channel.
      */
     maxPlanBytes: number;
+    /**
+     * Locale of the user-facing copy the host generates (the delivery render
+     * text, the steer messages, the no-sidebar review question). `auto`
+     * follows the connected sidebar view's reported locale (the browser's
+     * active DSH locale) and falls back to English; `zh` / `en` force one.
+     * Model-contract text (tool description, prompt rewrite, execute errors)
+     * stays English regardless.
+     */
+    locale: LocaleSetting;
 }
 /** Schemastery schema validated by the cordis Loader. */
-export declare const Config: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types").default<Schemastery.ObjectS<{
-    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types").default<string, string>;
-    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types").default<number, number>;
+export declare const Config: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<Schemastery.ObjectS<{
+    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<string, string>;
+    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<number, number>;
+    locale: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
 }>, Schemastery.ObjectT<{
-    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types").default<string, string>;
-    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types").default<number, number>;
+    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<string, string>;
+    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<number, number>;
+    locale: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
 }>>;
 /**
  * Resolve a raw config patch through the schema, returning a full

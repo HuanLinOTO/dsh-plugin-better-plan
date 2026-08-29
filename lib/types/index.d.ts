@@ -30,11 +30,18 @@
  * waterfall listener rewrites those sentences to the file-first contract on
  * every assembled prompt (see `prompt-override.ts`).
  *
+ * User-facing copy follows the session's locale (see `locale.ts`): the
+ * delivery render text (via the tool's `finalizeContent` seam), the steer
+ * messages, and the no-sidebar review question localize to the sidebar
+ * view's reported locale; the model contract (description, prompt rewrite,
+ * execute errors) stays English.
+ *
  * @module @huanlin/dsh-plugin-better-plan
  */
 import type { Context } from './context.ts';
 import { type BetterPlanConfig } from './config.ts';
 import { PlanDeliveryRegistry } from './delivery-registry.ts';
+import { LocaleDirectory } from './locale.ts';
 import { PlanReviewGate } from './review-gate.ts';
 export declare const name = "dsh-plugin-better-plan";
 /**
@@ -57,6 +64,7 @@ export type { BetterPlanConfig } from './config.ts';
 export declare function createBetterPlan(ctx: Context, config: BetterPlanConfig): {
     registry: PlanDeliveryRegistry;
     reviewGate: PlanReviewGate;
+    locales: LocaleDirectory;
 };
 /**
  * Plugin entry.

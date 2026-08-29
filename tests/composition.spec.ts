@@ -18,7 +18,7 @@ import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
 import { PLAN_DELIVERY_ANCHOR } from '../src/prompt-override.ts'
 import * as betterPlan from '../src/index.ts'
-import { resolveBetterPlanConfig } from '../src/config.ts'
+import { resolveBetterPlanConfig, type BetterPlanConfig } from '../src/config.ts'
 import type { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
 import type { PlanReviewGate, ReviewFrame } from '../src/review-gate.ts'
 import { REVIEW_API_PATH, type ReviewHttpRequest, type ReviewHttpResponse } from '../src/review-route.ts'
@@ -38,7 +38,7 @@ import { DELIVERY_WS_PATH } from '../src/ws-route.ts'
  * real WebSocket would do).
  */
 
-const CONFIG = { planDir: 'docs/plans', maxPlanBytes: 262144 }
+const CONFIG: BetterPlanConfig = resolveBetterPlanConfig({ planDir: 'docs/plans', maxPlanBytes: 262144, locale: 'auto' })
 
 interface CapturedUpgrade {
   path: string
@@ -386,9 +386,10 @@ describe('exit_plan_mode delivery flow', () => {
     // Wait until the review actually awaits (fs reads take real I/O ticks),
     // then unload the plugin (HMR) and only afterwards approve. The pre-step
     // flush listener is gone, so a success would claim an exit that can never
-    // land — the call must fail instead.
-    for (let waited = 0; harness.asked.length === 0 && waited < 100; waited++) {
-      await new Promise(resolve => setImmediate(resolve))
+    // land — the call must fail instead. (Time-budgeted, not tick-counted:
+    // the suite runs in parallel and tick budgets flake under load.)
+    for (let waited = 0; harness.asked.length === 0 && waited < 4000; waited += 10) {
+      await new Promise(resolve => setTimeout(resolve, 10))
     }
     expect(harness.asked).toHaveLength(1)
     await harness.fiber.dispose()
@@ -481,6 +482,64 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
     expect(steerText?.type === 'text' && steerText.text).toContain('chose to keep planning')
     expect(steerText?.type === 'text' && steerText.text).toContain('Their feedback: consider the resume path')
+  })
+
+  it('a zh session localizes the render content and the steered decisions (config locale: zh)', async () => {
+    const harness = await setupDirect({ locale: 'zh' })
+    const sessionId = 'side-zh-1'
+    harness.registry.attach(sessionId, () => {})
+    harness.reviewGate.attach(sessionId, () => {})
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+
+    // The tool result content is the localized end-of-turn contract…
+    const result = await callExit(harness, agent, 'plan.md')
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected pending result')
+    expect(result.value).toEqual({ delivered: true, decision: 'pending' })
+    expect(result.content[0]?.type === 'text' && result.content[0].text).toContain('请立即结束回合')
+    expect(harness.asked).toHaveLength(0)
+
+    // …and the sidebar approve steers the localized execution kick-off.
+    const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
+    expect(res.status).toBe(200)
+    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(agent.steered).toHaveLength(1)
+    const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
+    expect(steerText?.type === 'text' && steerText.text).toContain('[计划审批]')
+    expect(steerText?.type === 'text' && steerText.text).toContain('从这一步开始执行计划')
+  })
+
+  it('the popup fallback copy follows the view-reported locale (auto config, zh report)', async () => {
+    // The config stays auto, but a sidebar view attached earlier in the
+    // session reported zh on its review bootstrap (what the plan panel's
+    // GET does on mount); the view is now gone, so delivery falls back to
+    // the popup — whose copy resolves from the reported locale.
+    const harness = await setup(() => Promise.resolve({ answers: [{ id: 'plan-review', selected: ['批准'] }] }))
+    const sessionId = 'popup-zh-1'
+    const planPath = join(harness.dir, 'plan.md')
+    await writeFile(planPath, '# The plan', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+    // Drive the locale report through the captured review route.
+    const route = harness.routes.find(candidate => candidate.path === REVIEW_API_PATH)
+    if (route === undefined) throw new Error('the review route is not registered')
+    const res: { status?: number; body?: string; writeHead(): void; end(): void } = {
+      writeHead() {}, end() {},
+    }
+    await route.handler({
+      method: 'GET',
+      url: `${REVIEW_API_PATH}?session=${sessionId}&locale=zh-CN`,
+      headers: { host: '127.0.0.1:18080' },
+    } as unknown as ReviewHttpRequest, res as unknown as ReviewHttpResponse)
+
+    const result = await callExit(harness, agent, 'plan.md')
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected approved result')
+    expect(result.value).toEqual({ delivered: false, decision: 'approved' })
+    // The popup question copy was Chinese (the ask carried the zh copy and
+    // the answerer matched the localized approve label).
+    expect(harness.asked).toHaveLength(1)
+    expect(harness.asked[0]?.questions[0]?.header).toBe('计划审批')
   })
 
   it('a second delivery supersedes the open review: only the newest handlers can fire', async () => {

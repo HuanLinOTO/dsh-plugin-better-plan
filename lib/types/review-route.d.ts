@@ -15,6 +15,7 @@
  * @module @huanlin/dsh-plugin-better-plan/review-route
  */
 import type { PlanReviewGate } from './review-gate.ts';
+import type { LocaleDirectory } from './locale.ts';
 import { type FenceRequest } from './trust-fence.ts';
 /** The exact pathname the route registers on the host webServer. */
 export declare const REVIEW_API_PATH = "/better-plan/api/review";
@@ -44,6 +45,15 @@ export interface ReviewDecisionBody {
     feedback?: string;
     id?: string;
 }
+/** One parsed review decision body. */
+export interface ReviewDecisionBody {
+    session: string;
+    decision: 'approve' | 'keep';
+    feedback?: string;
+    id?: string;
+    /** The submitting view's active locale tag (BCP 47-style; optional). */
+    locale?: string;
+}
 /**
  * Parse and validate one review decision body (wire-boundary validation).
  * @param raw - the request body text.
@@ -59,18 +69,26 @@ export declare function parseReviewDecisionBody(raw: string): {
 /**
  * Serve one review request: GET bootstraps the plan panel's action bar with
  * the current state (the WS attach replay remains the live channel); POST
- * settles the pending decision.
+ * settles the pending decision. Both verbs record the submitting view's
+ * reported locale so the host's user-facing copy follows the browser.
+ *
+ * Error bodies carry a stable machine-readable `code` alongside the English
+ * `error` message: the plan panel maps known codes to localized copy and
+ * falls back to the raw message for unknown ones.
+ *
  * @param gate - the review gate holding the pending review.
  * @param req - the request (method/headers/body iterator).
  * @param res - the response.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  */
-export declare function handleReviewRequest(gate: PlanReviewGate, req: ReviewHttpRequest, res: ReviewHttpResponse, trustedHosts: readonly string[]): Promise<void>;
+export declare function handleReviewRequest(gate: PlanReviewGate, req: ReviewHttpRequest, res: ReviewHttpResponse, trustedHosts: readonly string[], directory: LocaleDirectory): Promise<void>;
 /**
  * Register the review decision route on the host webServer.
  * @param register - the webServer's route registrar.
  * @param gate - the review gate.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  * @returns the route disposer.
  */
-export declare function registerReviewRoute(register: (route: ReviewApiRoute) => () => void, gate: PlanReviewGate, trustedHosts: readonly string[]): () => void;
+export declare function registerReviewRoute(register: (route: ReviewApiRoute) => () => void, gate: PlanReviewGate, trustedHosts: readonly string[], directory: LocaleDirectory): () => void;

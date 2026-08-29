@@ -10,6 +10,8 @@
  * @module @huanlin/dsh-plugin-better-plan/client/review-store
  */
 
+import { activeLocale, submitErrorText, t } from './locales.ts'
+
 /** Mirrors the host gate's ReviewState (the wire face of a review frame). */
 export interface ReviewState {
   id: string
@@ -78,12 +80,14 @@ export type ReviewDecisionOutcome =
  * live channel): fills the bar when a review frame was missed (stale bundle,
  * reconnect gap). A live frame already in the store wins — the GET result is
  * only applied while the store is empty, so a late null response can never
- * clear a pending bar.
+ * clear a pending bar. The request reports the view's active locale so the
+ * host's user-facing copy follows the browser.
  * @param sessionId - the session whose review state to read.
  */
 export async function fetchReviewState(sessionId: string): Promise<void> {
   try {
-    const response = await fetch(`${REVIEW_API_PATH}?session=${encodeURIComponent(sessionId)}`)
+    const url = `${REVIEW_API_PATH}?session=${encodeURIComponent(sessionId)}&locale=${encodeURIComponent(activeLocale())}`
+    const response = await fetch(url)
     const parsed: { ok?: unknown; review?: unknown } | null = await response.json().catch(() => null)
     if (!response.ok || parsed === null || parsed.ok !== true) return
     if (reviewStore.get() !== null) return
@@ -97,7 +101,8 @@ export async function fetchReviewState(sessionId: string): Promise<void> {
 /**
  * Post one review decision to the host route and, on success, echo the
  * settled state into the store (the submitting view updates immediately;
- * other views follow over the WebSocket).
+ * other views follow over the WebSocket). The body reports the view's active
+ * locale; failures map the route's stable error codes to localized copy.
  * @param sessionId - the session whose plan is under review.
  * @param decision - the user's choice.
  * @param feedback - optional keep-planning feedback.
@@ -117,18 +122,20 @@ export async function submitReviewDecision(
       body: JSON.stringify({
         session: sessionId,
         decision,
+        locale: activeLocale(),
         ...(decision === 'keep' && feedback !== undefined && feedback !== '' ? { feedback } : {}),
         id: reviewId,
       }),
     })
-    const parsed: { ok?: unknown; review?: unknown; error?: unknown } | null
+    const parsed: { ok?: unknown; review?: unknown; error?: unknown; code?: unknown } | null
       = await response.json().catch(() => null)
     if (!response.ok || parsed === null || parsed.ok !== true) {
-      const error = typeof parsed?.error === 'string' ? parsed.error : `HTTP ${response.status}`
-      return { ok: false, error }
+      const raw = typeof parsed?.error === 'string' ? parsed.error : `HTTP ${response.status}`
+      const code = typeof parsed?.code === 'string' ? parsed.code : undefined
+      return { ok: false, error: submitErrorText(code, raw) }
     }
     if (!isReviewState(parsed.review)) {
-      return { ok: false, error: 'unexpected review response' }
+      return { ok: false, error: t('errSubmitFailed') }
     }
     reviewStore.set(parsed.review)
     return { ok: true, review: parsed.review }

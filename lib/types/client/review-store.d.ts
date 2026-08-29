@@ -54,14 +54,16 @@ export type ReviewDecisionOutcome = {
  * live channel): fills the bar when a review frame was missed (stale bundle,
  * reconnect gap). A live frame already in the store wins — the GET result is
  * only applied while the store is empty, so a late null response can never
- * clear a pending bar.
+ * clear a pending bar. The request reports the view's active locale so the
+ * host's user-facing copy follows the browser.
  * @param sessionId - the session whose review state to read.
  */
 export declare function fetchReviewState(sessionId: string): Promise<void>;
 /**
  * Post one review decision to the host route and, on success, echo the
  * settled state into the store (the submitting view updates immediately;
- * other views follow over the WebSocket).
+ * other views follow over the WebSocket). The body reports the view's active
+ * locale; failures map the route's stable error codes to localized copy.
  * @param sessionId - the session whose plan is under review.
  * @param decision - the user's choice.
  * @param feedback - optional keep-planning feedback.

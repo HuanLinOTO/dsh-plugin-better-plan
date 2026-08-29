@@ -16,6 +16,7 @@
 - **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段四处原版契约句子就地改写为文件先行契约：交付句改写为**同回合两步强制交付**（先写 `docs/plans/YYYY-MM-DD-<topic>.md`——日期 + 主题短横线命名，再立即调 `exit_plan_mode`）；原版「exit_plan_mode 是该回合唯一且最后的工具调用」句同步改写（否则模型把已发生的 write 视作违反该句，写完文件就停）；写禁句与规则压治句各带豁免。锚点句子只在计划模式激活时出现，无需自管状态。
 - **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版阻塞审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染（detail 是完整计划全文），批准后原样在回合内继续。
 - **审批状态双通道**：WS `review` 帧实时广播（多窗口同步、attach 回放恢复刷新）；Plan 面板挂载时再经 `GET /better-plan/api/review` 引导拉取一次（防丢帧；store 已有活动状态时让位，不会误清）。
+- **i18n（跟随 DSH 语言，zh/en）**：面向用户的文案双语——侧边栏 Plan 面板与 tab 标题注册进 DSH 共享 locale 注册表（命名空间 `betterPlan`），跟随 Host-backed 语言偏好实时切换；宿主端文案（交付结果的 render 文本、steer 消息、无侧边栏审批弹窗）按会话解析 locale——config `locale` 覆盖 → 连接视图上报的 locale（WS connect 查询参数 + 审批请求携带浏览器当前 DSH 语言）→ 英文。**模型契约文本保持英文**（工具 description、`plan:policy` 改写、execute 错误指引）。审批路由的错误响应带稳定 `code`，面板按 code 映射本地化文案，未知 code 回退原文。
 - **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件。
 
 ## 开发
@@ -33,17 +34,20 @@ src/
 ├── delivery-registry.ts   # per-session 推送队列 + 视图 attach（consume-on-send，队列上限 8）
 ├── ws-route.ts            # /better-plan/ws/delivery 升级路由 + tagged 帧（deliver/review）+ socket attach
 ├── trust-fence.ts         # Host 回环 / trustedHosts 浏览器信任栅栏（对齐 /api 网关语义）
+├── locale.ts              # locale 词表 + 会话级解析链（config → 视图上报 → en）+ 宿主端双语文案
 ├── resolve-cwd.ts         # 会话 cwd 解析链（header → persistence → process.cwd）
 ├── first-heading.ts       # 计划首 heading 提取（原版同款正则）+ basename
 └── client/
-    ├── index.tsx          # client 入口: Plan tab 注册 + 交付 WS 订阅 + tagged 帧分发
+    ├── index.tsx          # client 入口: Plan tab 注册 + locale 词典注册 + 交付 WS 订阅 + tagged 帧分发
     ├── PlanView.tsx       # 面板组件：状态头 + 审批动作栏 + MarkdownText 正文 + 加载/错误/重试
-    ├── review-store.ts    # 审批状态外部 store + submitReviewDecision（POST 回宿主端）
+    ├── locales.ts         # 面板双语词典（ctx.locale 注册 + 模块级 t()）+ 路由错误 code 映射
+    ├── review-store.ts    # 审批状态外部 store + submitReviewDecision（POST 回宿主端，携带 locale）
     ├── markdown-props.ts  # 双形状 MarkdownText props（内联，不得 value-import better-sidebar 内部）
     └── icons.tsx          # 内联 SVG 图标
 tests/
 ├── composition.spec.ts    # 组合层：真实 ToolRuntime/AgentRegistry/UserQuestionService 驱动 execute 全分支（含侧边栏审批流）
-├── shadow-tool.spec.ts    # 工具契约：description / 紧凑卡投影 / render 双分支
+├── locale.spec.ts         # locale 目录/解析链/双语文案
+├── shadow-tool.spec.ts    # 工具契约：description / 紧凑卡投影 / render 双分支 / finalizeContent 本地化
 ├── review-gate.spec.ts / review-route.spec.ts
 ├── delivery-registry.spec.ts / ws-route.spec.ts / trust-fence.spec.ts / resolve-cwd.spec.ts / first-heading.spec.ts
 └── client/
@@ -91,6 +95,7 @@ dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 |------|-----------|------|
 | `planDir` | `string = 'docs/plans'` | 工具 description 中建议的计划目录 |
 | `maxPlanBytes` | `number = 262144` | 计划文件读取上限；超限拒绝并提示精简 |
+| `locale` | `'auto' \| 'zh' \| 'en' = 'auto'` | 宿主端用户可见文案的语言：`auto` 跟随连接视图上报的 locale（浏览器当前 DSH 语言），`zh`/`en` 强制指定；模型契约文本不受影响 |
 
 不注入额外系统提示段——新契约全部由工具 description 携带（`plan:policy` 段保持原版原文，`exit_plan_mode` 名称未变故其陈述依然为真）。
 
@@ -98,7 +103,7 @@ dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 
 ```sh
 pnpm run typecheck   # 类型门禁（host + client 两个 tsc 面）
-pnpm test            # 106 个单元/组合/组件测试
+pnpm test            # 124 个单元/组合/组件测试
 pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 ```
 

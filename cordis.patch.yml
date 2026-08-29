@@ -13,9 +13,15 @@
 #                  description (e.g. `docs/plans`).
 #   maxPlanBytes — read cap of one plan file; larger files are refused with
 #                  guidance to trim the plan.
+#   locale       — locale of the host's user-facing copy (delivery render
+#                  text, steer messages, no-sidebar review question): `auto`
+#                  follows the connected sidebar view's reported locale
+#                  (the browser's active DSH language), `zh`/`en` force one.
+#                  Model-contract text stays English regardless.
 - insert:
     - id: better-plan
       name: '@huanlin/dsh-plugin-better-plan'
       config:
         planDir: docs/plans
         maxPlanBytes: 262144
+        locale: auto

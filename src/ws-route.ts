@@ -14,6 +14,7 @@
 
 import { WebSocketServer, type WebSocket } from 'ws'
 import type { PlanDeliveryRegistry } from './delivery-registry.ts'
+import type { LocaleDirectory } from './locale.ts'
 import type { PlanReviewGate } from './review-gate.ts'
 import { isTrustedDeliveryRequest, type FenceRequest } from './trust-fence.ts'
 
@@ -33,20 +34,24 @@ export interface DeliverySocket {
 }
 
 /**
- * Wire one delivery socket to the registries: parse `?session=`, attach the
- * delivery queue (replaying queued pushes) and the review gate (replaying
- * the latest review state), and detach on close/error so later pushes queue
- * instead of accumulating on a dead socket.
+ * Wire one delivery socket to the registries: parse `?session=` (and the
+ * view-reported `?locale=`, recorded so the host's user-facing copy follows
+ * the browser's active DSH locale), attach the delivery queue (replaying
+ * queued pushes) and the review gate (replaying the latest review state),
+ * and detach on close/error so later pushes queue instead of accumulating
+ * on a dead socket.
  * @param registry - the delivery registry.
  * @param gate - the review gate.
  * @param ws - the connected socket.
  * @param req - the upgrade request.
+ * @param directory - the locale directory the reported locale is recorded in.
  */
 export function attachDeliverySocket(
   registry: PlanDeliveryRegistry,
   gate: PlanReviewGate,
   ws: DeliverySocket,
   req: DeliveryUpgradeRequest,
+  directory: LocaleDirectory,
 ): void {
   const url = new URL(req.url ?? '/', 'http://dsh.internal')
   const sessionId = url.searchParams.get('session')
@@ -54,6 +59,7 @@ export function attachDeliverySocket(
     ws.close(1008, 'session is required')
     return
   }
+  directory.report(sessionId, url.searchParams.get('locale'))
   const send = (frame: unknown): void => {
     ws.send(JSON.stringify(frame))
   }
@@ -73,6 +79,7 @@ export function attachDeliverySocket(
  * @param registry - the delivery registry.
  * @param gate - the review gate.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  * @returns the route disposer.
  */
 export function registerDeliveryRoute(
@@ -83,6 +90,7 @@ export function registerDeliveryRoute(
   registry: PlanDeliveryRegistry,
   gate: PlanReviewGate,
   trustedHosts: readonly string[],
+  directory: LocaleDirectory,
 ): () => void {
   const wss = new WebSocketServer({ noServer: true })
   const dispose = registerUpgrade({
@@ -96,7 +104,7 @@ export function registerDeliveryRoute(
         req as unknown as import('node:http').IncomingMessage,
         socket as unknown as import('node:stream').Duplex,
         head as Buffer,
-        (ws: WebSocket) => { attachDeliverySocket(registry, gate, ws, req) },
+        (ws: WebSocket) => { attachDeliverySocket(registry, gate, ws, req, directory) },
       )
     },
   })

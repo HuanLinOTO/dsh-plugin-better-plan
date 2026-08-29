@@ -16,6 +16,7 @@
  */
 
 import type { PlanReviewGate, ReviewState } from './review-gate.ts'
+import type { LocaleDirectory } from './locale.ts'
 import { isTrustedDeliveryRequest, type FenceRequest } from './trust-fence.ts'
 
 /** The exact pathname the route registers on the host webServer. */
@@ -52,6 +53,16 @@ export interface ReviewDecisionBody {
   id?: string
 }
 
+/** One parsed review decision body. */
+export interface ReviewDecisionBody {
+  session: string
+  decision: 'approve' | 'keep'
+  feedback?: string
+  id?: string
+  /** The submitting view's active locale tag (BCP 47-style; optional). */
+  locale?: string
+}
+
 /**
  * Parse and validate one review decision body (wire-boundary validation).
  * @param raw - the request body text.
@@ -71,33 +82,42 @@ export function parseReviewDecisionBody(raw: string): { value: ReviewDecisionBod
   const decision: ReviewDecisionBody = { session: record.session, decision: record.decision }
   if (typeof record.feedback === 'string' && record.feedback !== '') decision.feedback = record.feedback
   if (typeof record.id === 'string' && record.id !== '') decision.id = record.id
+  if (typeof record.locale === 'string' && record.locale !== '') decision.locale = record.locale
   return { value: decision }
 }
 
 /**
  * Serve one review request: GET bootstraps the plan panel's action bar with
  * the current state (the WS attach replay remains the live channel); POST
- * settles the pending decision.
+ * settles the pending decision. Both verbs record the submitting view's
+ * reported locale so the host's user-facing copy follows the browser.
+ *
+ * Error bodies carry a stable machine-readable `code` alongside the English
+ * `error` message: the plan panel maps known codes to localized copy and
+ * falls back to the raw message for unknown ones.
+ *
  * @param gate - the review gate holding the pending review.
  * @param req - the request (method/headers/body iterator).
  * @param res - the response.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  */
 export async function handleReviewRequest(
   gate: PlanReviewGate,
   req: ReviewHttpRequest,
   res: ReviewHttpResponse,
   trustedHosts: readonly string[],
+  directory: LocaleDirectory,
 ): Promise<void> {
-  const json = (status: number, body: unknown): void => {
+  const json = (status: number, code: string, error: string): void => {
     res.writeHead(status, { 'content-type': 'application/json' })
-    res.end(JSON.stringify(body))
+    res.end(JSON.stringify({ ok: false, code, error }))
   }
   if (req.method !== 'POST' && req.method !== 'GET') {
-    return json(405, { ok: false, error: 'GET or POST only' })
+    return json(405, 'method_not_allowed', 'GET or POST only')
   }
   if (!isTrustedDeliveryRequest(req, trustedHosts)) {
-    return json(403, { ok: false, error: 'untrusted origin' })
+    return json(403, 'untrusted_origin', 'untrusted origin')
   }
   if (req.method === 'GET') {
     // Bootstrap the plan panel's action bar with the current state; the WS
@@ -105,36 +125,41 @@ export async function handleReviewRequest(
     const url = new URL(req.url ?? '/', 'http://dsh.internal')
     const sessionId = url.searchParams.get('session')
     if (sessionId === null || sessionId === '') {
-      return json(400, { ok: false, error: 'session is required' })
+      return json(400, 'session_required', 'session is required')
     }
-    return json(200, { ok: true, review: gate.peek(sessionId) })
+    directory.report(sessionId, url.searchParams.get('locale'))
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, review: gate.peek(sessionId) }))
+    return
   }
   let raw = ''
   let bytes = 0
   for await (const chunk of req) {
     bytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength
     if (bytes > REVIEW_BODY_LIMIT) {
-      return json(413, { ok: false, error: `review request body exceeds the ${REVIEW_BODY_LIMIT}-byte limit` })
+      return json(413, 'body_too_large', `review request body exceeds the ${REVIEW_BODY_LIMIT}-byte limit`)
     }
     raw += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
   }
   const parsed = parseReviewDecisionBody(raw)
   if (parsed.error !== undefined) {
-    return json(400, { ok: false, error: parsed.error })
+    return json(400, 'invalid_body', parsed.error)
   }
   const body = parsed.value
+  directory.report(body.session, body.locale)
   const pending = gate.peek(body.session)
   if (pending === null) {
-    return json(409, { ok: false, error: 'no plan review is pending for this session' })
+    return json(409, 'no_pending', 'no plan review is pending for this session')
   }
   if (body.id !== undefined && body.id !== pending.id) {
-    return json(409, { ok: false, error: 'the plan panel is stale; a newer plan delivery is under review' })
+    return json(409, 'stale_review', 'the plan panel is stale; a newer plan delivery is under review')
   }
   const review: ReviewState | undefined = gate.decide(body.session, body.decision, body.feedback)
   if (review === undefined) {
-    return json(409, { ok: false, error: 'no plan review is pending for this session' })
+    return json(409, 'no_pending', 'no plan review is pending for this session')
   }
-  return json(200, { ok: true, review })
+  res.writeHead(200, { 'content-type': 'application/json' })
+  res.end(JSON.stringify({ ok: true, review }))
 }
 
 /**
@@ -142,16 +167,18 @@ export async function handleReviewRequest(
  * @param register - the webServer's route registrar.
  * @param gate - the review gate.
  * @param trustedHosts - non-loopback authorities the deployment serves.
+ * @param directory - the locale directory view reports are recorded in.
  * @returns the route disposer.
  */
 export function registerReviewRoute(
   register: (route: ReviewApiRoute) => () => void,
   gate: PlanReviewGate,
   trustedHosts: readonly string[],
+  directory: LocaleDirectory,
 ): () => void {
   return register({
     kind: 'exact',
     path: REVIEW_API_PATH,
-    handler: (req, res) => handleReviewRequest(gate, req, res, trustedHosts),
+    handler: (req, res) => handleReviewRequest(gate, req, res, trustedHosts, directory),
   })
 }

@@ -10,6 +10,7 @@
  */
 
 import z from 'schemastery'
+import type { LocaleSetting } from './locale.ts'
 
 /** Deployment-tunable configuration for the better-plan plugin. */
 export interface BetterPlanConfig {
@@ -23,16 +24,26 @@ export interface BetterPlanConfig {
    * to trim the plan, so an unbounded write cannot flood the review channel.
    */
   maxPlanBytes: number
+  /**
+   * Locale of the user-facing copy the host generates (the delivery render
+   * text, the steer messages, the no-sidebar review question). `auto`
+   * follows the connected sidebar view's reported locale (the browser's
+   * active DSH locale) and falls back to English; `zh` / `en` force one.
+   * Model-contract text (tool description, prompt rewrite, execute errors)
+   * stays English regardless.
+   */
+  locale: LocaleSetting
 }
 
 /** Schemastery schema validated by the cordis Loader. */
 export const Config = z.object({
   planDir: z.string().default('docs/plans'),
   maxPlanBytes: z.number().step(1).min(1).default(262144),
+  locale: z.union(['auto', 'zh', 'en']).default('auto'),
 })
 
 /** Known config keys (for strict unknown-key rejection). */
-const CONFIG_KEYS = new Set(['planDir', 'maxPlanBytes'])
+const CONFIG_KEYS = new Set(['planDir', 'maxPlanBytes', 'locale'])
 
 /**
  * Resolve a raw config patch through the schema, returning a full
@@ -47,7 +58,7 @@ export function resolveBetterPlanConfig(input: Partial<BetterPlanConfig>): Bette
   if (input !== null && typeof input === 'object' && !Array.isArray(input)) {
     for (const key of Object.keys(input)) {
       if (!CONFIG_KEYS.has(key)) {
-        throw new Error(`better-plan: unknown config key "${key}" — config is { planDir, maxPlanBytes }`)
+        throw new Error(`better-plan: unknown config key "${key}" — config is { planDir, maxPlanBytes, locale }`)
       }
     }
   }

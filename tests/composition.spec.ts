@@ -510,6 +510,32 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     expect(steerText?.type === 'text' && steerText.text).toContain('从这一步开始执行计划')
   })
 
+  it('approve_new_session settles delegated: the mode flips but the steer hands execution off instead of starting it', async () => {
+    const harness = await setupDirect({ locale: 'zh' })
+    const sessionId = 'side-delegate-1'
+    const reviews: ReviewFrame[] = []
+    harness.registry.attach(sessionId, () => {})
+    harness.reviewGate.attach(sessionId, frame => reviews.push(frame))
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+    const result = await callExit(harness, agent, 'plan.md')
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected pending result')
+
+    const res = await postDecision(harness, { session: sessionId, decision: 'approve_new_session' })
+    expect(res.status).toBe(200)
+    // The wire settles as delegated (the panel's status line for the
+    // handoff), the mode is off, and the steer closes the planning session
+    // without ordering execution here.
+    expect(reviews.at(-1)?.review?.status).toBe('delegated')
+    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(agent.steered).toHaveLength(1)
+    const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
+    expect(steerText?.type === 'text' && steerText.text).toContain('[计划审批]')
+    expect(steerText?.type === 'text' && steerText.text).toContain('在一个新对话中执行')
+    expect(steerText?.type === 'text' && steerText.text).toContain('不要在此会话中执行该计划')
+  })
+
   it('the popup fallback copy follows the view-reported locale (auto config, zh report)', async () => {
     // The config stays auto, but a sidebar view attached earlier in the
     // session reported zh on its review bootstrap (what the plan panel's

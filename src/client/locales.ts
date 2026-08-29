@@ -24,10 +24,14 @@ export const zhDict = {
   copied: '已复制',
   copy: '复制',
   copiedLabel: '已复制',
-  reviewHint: '在此审阅计划——聊天中不会弹出审批卡。点「批准」退出计划模式，或附反馈选择「继续规划」。',
+  reviewHint: '在此审阅计划——聊天中不会弹出审批卡。点「批准」在本对话执行，点「新开对话执行」移到全新对话执行，或附反馈选择「继续规划」。',
   feedbackPlaceholder: '「继续规划」时可附反馈（可选）…',
   approve: '批准',
   keepPlanning: '继续规划',
+  approveNewSession: '新开对话执行',
+  delegatingStatus: '计划已批准——正在新建执行对话…',
+  delegatedStatus: '计划已批准——执行已移交到新对话。',
+  errDelegateFailed: '新开执行对话失败',
   approvedStatus: '计划已批准——模型正在执行该计划。',
   keptStatus: '反馈已发送——模型正在修改计划。',
   loading: '正在读取计划…',
@@ -50,10 +54,14 @@ export const enDict: Record<keyof typeof zhDict, string> = {
   copied: 'Copied',
   copy: 'Copy',
   copiedLabel: 'Copied',
-  reviewHint: 'Review this plan here — the chat shows no approval popup. Approve to leave plan mode, or keep planning with feedback.',
+  reviewHint: 'Review this plan here — the chat shows no approval popup. Approve to execute in this conversation, execute in a new chat, or keep planning with feedback.',
   feedbackPlaceholder: 'Optional feedback for "Keep planning"…',
   approve: 'Approve',
   keepPlanning: 'Keep planning',
+  approveNewSession: 'Execute in new chat',
+  delegatingStatus: 'Plan approved — starting the execution conversation…',
+  delegatedStatus: 'Plan approved — execution continues in a new conversation.',
+  errDelegateFailed: 'Failed to start the execution conversation',
   approvedStatus: 'Plan approved — the model is carrying out the plan.',
   keptStatus: 'Feedback sent — the model is revising the plan.',
   loading: 'Loading plan…',
@@ -111,6 +119,24 @@ export function activeLocale(): 'zh' | 'en' {
  */
 export function t(key: keyof PlanCopy): string {
   return DICTS[activeLocale()][key]
+}
+
+/**
+ * The kickoff prompt the delegation flow queues into the NEW conversation:
+ * the model there has no context, so the message anchors it on the approved
+ * plan file (an absolute path) and orders execution. It is both
+ * user-visible (a chat bubble) and model-directed, so it localizes with the
+ * view like the steer copy does.
+ * @param path - the absolute plan file path.
+ * @returns the kickoff prompt text.
+ */
+export function executionKickoffPrompt(path: string): string {
+  if (activeLocale() === 'zh') {
+    return `[计划执行] 用户已在上一对话中制定并批准了以下计划文件：${path}。`
+      + '这是一个全新对话——请先读取该计划文件，然后严格按计划开始执行，无需重新规划或再次确认。'
+  }
+  return `[Plan execution] The user planned and approved the following plan file in a previous conversation: ${path}. `
+    + 'This is a fresh conversation — read that plan file first, then carry it out exactly as written; no re-planning or re-confirmation needed.'
 }
 
 /**

@@ -11,8 +11,11 @@
  *
  * The review state comes from the delivery WebSocket's review frames (via
  * the shared review store, restored by the attach replay after a refresh).
- * While a review is pending the bar offers Approve / Keep planning; a
- * decision POSTs to the host's review route and the echo updates the store.
+ * While a review is pending the bar offers Approve / Execute in new chat /
+ * Keep planning; a decision POSTs to the host's review route and the echo
+ * updates the store. The delegation choice then launches the execution
+ * conversation through the sessions service (see execution-launch.ts) and
+ * navigates there.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/PlanView
  */
@@ -23,6 +26,7 @@ import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primiti
 import type { TabComponentProps } from 'dsh-better-sidebar/client/service'
 import { t } from './locales.ts'
 import { markdownTextProps } from './markdown-props.ts'
+import { launchExecutionConversation, type SessionsServiceFace } from './execution-launch.ts'
 import { fetchReviewState, reviewStore, submitReviewDecision } from './review-store.ts'
 
 /** The meta payload the delivery flow stores on the tab. */
@@ -121,8 +125,12 @@ const styles: Record<string, ComponentProps<'div'>['style']> = {
 }
 
 /** The one-line status a settled review renders (cancelled stays quiet). */
-function settledReviewText(status: 'approved' | 'kept' | 'cancelled'): string | null {
+function settledReviewText(
+  status: 'approved' | 'delegated' | 'kept' | 'cancelled',
+  delegating: boolean,
+): string | null {
   if (status === 'approved') return t('approvedStatus')
+  if (status === 'delegated') return delegating ? t('delegatingStatus') : t('delegatedStatus')
   if (status === 'kept') return t('keptStatus')
   return null
 }
@@ -139,18 +147,25 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
   const [attempt, setAttempt] = useState(0)
   const [copied, setCopied] = useState(false)
   const review = useSyncExternalStore(reviewStore.subscribe, reviewStore.get)
-  const pendingReview = review !== null && review.status === 'pending' && review.path === path ? review : null
-  const settledReview = review !== null && review.path === path && review.status !== 'pending'
-    ? settledReviewText(review.status)
-    : null
   const [feedback, setFeedback] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | undefined>(undefined)
+  const [delegating, setDelegating] = useState(false)
+  const [delegateError, setDelegateError] = useState<string | undefined>(undefined)
+  // The delegation flow needs the sessions service (a fresh conversation is
+  // a first-class session, not a plugin-owned thread); absent service → the
+  // third button simply does not render.
+  const sessions = ctx.get('sessions') as SessionsServiceFace | undefined
+  const pendingReview = review !== null && review.status === 'pending' && review.path === path ? review : null
+  const settledReview = review !== null && review.path === path && review.status !== 'pending'
+    ? settledReviewText(review.status, delegating)
+    : null
 
   // A new review starts with a clean feedback field.
   useEffect(() => {
     setFeedback('')
     setSubmitError(undefined)
+    setDelegateError(undefined)
   }, [review?.id])
 
   // HTTP bootstrap of the review state (covers a missed WS review frame);
@@ -187,16 +202,30 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
     window.setTimeout(() => { setCopied(false) }, 1500)
   }, [path])
 
-  const decide = useCallback((decision: 'approve' | 'keep') => {
+  const decide = useCallback((decision: 'approve' | 'keep' | 'approve_new_session') => {
     if (pendingReview === null) return
     setSubmitting(true)
     setSubmitError(undefined)
     void submitReviewDecision(scope.sessionId, decision, decision === 'keep' ? feedback : undefined, pendingReview.id)
       .then((outcome) => {
-        if (outcome.ok === false) setSubmitError(outcome.error)
+        if (outcome.ok === false) {
+          setSubmitError(outcome.error)
+          return
+        }
+        if (decision !== 'approve_new_session') return
+        // Delegation: the review is settled, so the bar gives way to the
+        // status line while the execution conversation launches. Failures
+        // surface under it — the plan path stays visible for a manual retry.
+        if (sessions === undefined) return
+        setDelegating(true)
+        launchExecutionConversation(sessions, pendingReview.path, scope.sessionId)
+          .catch((cause: unknown) => {
+            setDelegateError(`${t('errDelegateFailed')}: ${cause instanceof Error ? cause.message : String(cause)}`)
+          })
+          .finally(() => { setDelegating(false) })
       })
       .finally(() => { setSubmitting(false) })
-  }, [pendingReview, scope.sessionId, feedback])
+  }, [pendingReview, scope.sessionId, feedback, sessions])
 
   return createElement('div', { style: styles.root },
     createElement('div', { style: styles.header },
@@ -233,6 +262,13 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
               disabled: submitting,
               onClick: () => { decide('approve') },
             }, t('approve')),
+            sessions !== undefined
+              ? createElement('button', {
+                  style: styles.primaryButton,
+                  disabled: submitting,
+                  onClick: () => { decide('approve_new_session') },
+                }, t('approveNewSession'))
+              : null,
             createElement('button', {
               style: styles.button,
               disabled: submitting,
@@ -242,7 +278,10 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
           submitError !== undefined ? createElement('div', { style: styles.reviewError }, submitError) : null,
         )
       : settledReview !== null
-        ? createElement('div', { style: styles.reviewStatus }, settledReview)
+        ? createElement('div', { style: styles.reviewStatus },
+            settledReview,
+            delegateError !== undefined ? createElement('div', { style: styles.reviewError }, delegateError) : null,
+          )
         : null,
     load.status === 'loading'
       ? createElement('div', { style: styles.notice }, t('loading'))

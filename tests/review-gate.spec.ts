@@ -4,17 +4,25 @@ import { PlanReviewGate, type ReviewFrame, type ReviewHandlers } from '../src/re
 const REVIEW = { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }
 
 /** Map captured frames to their status, keeping an explicit null as null. */
-function statusesOf(frames: ReviewFrame[]): Array<'pending' | 'approved' | 'kept' | 'cancelled' | null> {
+function statusesOf(
+  frames: ReviewFrame[],
+): Array<'pending' | 'approved' | 'delegated' | 'kept' | 'cancelled' | null> {
   return frames.map(frame => frame.review === null ? null : frame.review?.status ?? null)
 }
 
 /** Spied handlers recording which decisions fired. */
-function spyHandlers(): ReviewHandlers & { approvals: number; keeps: Array<string | undefined> } {
+function spyHandlers(): ReviewHandlers & {
+  approvals: number
+  keeps: Array<string | undefined>
+  delegations: number
+} {
   const handlers = {
     approvals: 0,
     keeps: [] as Array<string | undefined>,
+    delegations: 0,
     onApprove: vi.fn(() => { handlers.approvals += 1 }),
     onKeep: vi.fn((feedback: string | undefined) => { handlers.keeps.push(feedback) }),
+    onDelegate: vi.fn(() => { handlers.delegations += 1 }),
   }
   return handlers
 }
@@ -49,6 +57,22 @@ describe('PlanReviewGate.begin/decide', () => {
     gate.begin('s1', REVIEW, handlers)
     gate.decide('s1', 'keep')
     expect(handlers.keeps).toEqual([undefined])
+  })
+
+  it('approve_new_session settles as delegated and fires onDelegate', () => {
+    const gate = new PlanReviewGate()
+    const frames: ReviewFrame[] = []
+    const handlers = spyHandlers()
+    gate.begin('s1', REVIEW, handlers)
+    gate.attach('s1', frame => frames.push(frame))
+    const settled = gate.decide('s1', 'approve_new_session')
+    expect(settled).toMatchObject({ id: 'd1', status: 'delegated' })
+    expect(handlers.delegations).toBe(1)
+    expect(handlers.approvals).toBe(0)
+    expect(gate.peek('s1')).toBeNull()
+    // The attach replay carried the pending state; the decide broadcast the
+    // delegated settlement.
+    expect(statusesOf(frames)).toEqual(['pending', 'delegated'])
   })
 
   it('returns undefined and stays silent when deciding with nothing pending', () => {

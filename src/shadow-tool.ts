@@ -41,7 +41,7 @@ import type { BetterPlanConfig } from './config.ts'
 import type { Context } from './context.ts'
 import type { PlanDeliveryRegistry } from './delivery-registry.ts'
 import {
-  approvalSteerText, keepPlanningSteerText, localizedRenderContent, planReviewCopy,
+  approvalSteerText, delegatedSteerText, keepPlanningSteerText, localizedRenderContent, planReviewCopy,
   type PlanLocale,
 } from './locale.ts'
 import type { PlanReviewGate } from './review-gate.ts'
@@ -221,6 +221,26 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       const plan = await readFile(absolute, 'utf8')
       const title = firstHeading(plan) ?? basenameOf(absolute)
       const { id, delivered } = registry.enqueue(sessionId, absolute, title)
+      /** Flip plan mode off for a settled review: between turns the append
+       * lands immediately (the built-in controller does the same when the
+       * fold is idle); a failed durable append retries through the
+       * pendingExits boundary flush at the steered turn's first accepted
+       * pre-step. Shared by both approval paths. */
+      const exitPlanMode = (): void => {
+        try {
+          agent.session.append('plan/mode', { active: false })
+        } catch (error) {
+          ctx.logger.warn('dsh-plugin-better-plan: the approved plan exit could not be appended directly; deferring to the next boundary: %o', error)
+          deps.onApproved(agent.session)
+        }
+      }
+      /** Steer one decision outcome back as the next turn's user message. */
+      const steerDecision = (text: string): void => {
+        agent.steer(createUserMessage({
+          content: [{ type: 'text' as const, text }],
+          source: { kind: 'user' as const },
+        }))
+      }
       if (delivered) {
         // Sidebar review: return immediately (the render ends the turn) and
         // steer the decision back when the user makes it in the plan panel.
@@ -228,26 +248,18 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
         // reported may arrive (or change) after this call returns.
         deps.reviewGate.begin(sessionId, { id, path: absolute, title }, {
           onApprove: () => {
-            // Between turns the append lands immediately (the built-in
-            // controller does the same when the fold is idle). A failed
-            // durable append retries through the pendingExits boundary flush
-            // at the steered turn's first accepted pre-step.
-            try {
-              agent.session.append('plan/mode', { active: false })
-            } catch (error) {
-              ctx.logger.warn('dsh-plugin-better-plan: the approved plan exit could not be appended directly; deferring to the next boundary: %o', error)
-              deps.onApproved(agent.session)
-            }
-            agent.steer(createUserMessage({
-              content: [{ type: 'text' as const, text: approvalSteerText(deps.localeOf(sessionId)) }],
-              source: { kind: 'user' as const },
-            }))
+            exitPlanMode()
+            steerDecision(approvalSteerText(deps.localeOf(sessionId)))
           },
           onKeep: (feedback) => {
-            agent.steer(createUserMessage({
-              content: [{ type: 'text' as const, text: keepPlanningSteerText(feedback, deps.localeOf(sessionId)) }],
-              source: { kind: 'user' as const },
-            }))
+            steerDecision(keepPlanningSteerText(feedback, deps.localeOf(sessionId)))
+          },
+          // Approve-and-delegate: execution runs in a NEW conversation the
+          // plan panel launches (through the client sessions service); this
+          // session is closed out instead of steered into execution.
+          onDelegate: () => {
+            exitPlanMode()
+            steerDecision(delegatedSteerText(deps.localeOf(sessionId)))
           },
         })
         return { delivered: true as const, decision: 'pending' as const }

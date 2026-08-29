@@ -19,7 +19,10 @@
  */
 
 /** Lifecycle of one plan review (the wire status the plan panel renders). */
-export type ReviewStatus = 'pending' | 'approved' | 'kept' | 'cancelled'
+export type ReviewStatus = 'pending' | 'approved' | 'delegated' | 'kept' | 'cancelled'
+
+/** The sidebar decision vocabulary: how the plan panel settles a review. */
+export type ReviewDecision = 'approve' | 'keep' | 'approve_new_session'
 
 /** One review's user-visible state (the wire face of a review frame). */
 export interface ReviewState {
@@ -43,11 +46,13 @@ export type ReviewSender = (frame: ReviewFrame) => void
 
 /**
  * The decision side effects, wired by the tool that delivered the plan:
- * steer the outcome back to the model (approval also flips plan mode off).
+ * steer the outcome back to the model (approval also flips plan mode off;
+ * delegation flips it off too but hands execution to a new conversation).
  */
 export interface ReviewHandlers {
   onApprove(): void
   onKeep(feedback: string | undefined): void
+  onDelegate(): void
 }
 
 interface Waiter {
@@ -88,18 +93,23 @@ export class PlanReviewGate {
   /**
    * Settle the session's pending review from the sidebar decision.
    * @param sessionId - the session under review.
-   * @param decision - the user's choice.
+   * @param decision - the user's choice (approve_new_session settles as
+   *   `delegated`: execution continues in a new conversation).
    * @param feedback - optional keep-planning feedback (trimmed; forwarded to
    *   the model verbatim in the steer message).
    * @returns the settled review state, or undefined when nothing is pending.
    */
-  decide(sessionId: string, decision: 'approve' | 'keep', feedback?: string): ReviewState | undefined {
+  decide(sessionId: string, decision: ReviewDecision, feedback?: string): ReviewState | undefined {
     const waiter = this.pending.get(sessionId)
     if (waiter === undefined) return undefined
     this.pending.delete(sessionId)
-    const settled = this.settle(sessionId, { ...waiter.review, status: decision === 'approve' ? 'approved' : 'kept' })
+    const settled = this.settle(sessionId, {
+      ...waiter.review,
+      status: decision === 'approve' ? 'approved' : decision === 'keep' ? 'kept' : 'delegated',
+    })
     if (decision === 'approve') waiter.handlers.onApprove()
-    else waiter.handlers.onKeep(feedback?.trim() || undefined)
+    else if (decision === 'keep') waiter.handlers.onKeep(feedback?.trim() || undefined)
+    else waiter.handlers.onDelegate()
     return settled
   }
 

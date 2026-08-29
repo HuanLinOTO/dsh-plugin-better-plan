@@ -49,6 +49,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Stub fetch for the fs.read endpoint and both review verbs (GET bootstrap + POST decision). */
+function stubReviewFetch(reviewResponse: unknown, ok = true): void {
+  vi.mocked(fetch).mockImplementation(((input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).startsWith(REVIEW_API_PATH)) return Promise.resolve(fetchResponse(reviewResponse, ok))
+    return Promise.resolve(fetchResponse({ ok: true, value: { kind: 'text', content: '# The plan', truncated: false } }))
+  }) as never)
+}
+
 describe('planPathOf', () => {
   it('prefers meta.path and falls back to the tab path', () => {
     expect(planPathOf({ meta: { path: '/meta.md' }, path: '/tab.md' } as never)).toBe('/meta.md')
@@ -122,14 +130,6 @@ describe('PlanView', () => {
 })
 
 describe('PlanView review action bar (the sidebar approval surface)', () => {
-  /** Stub fetch for the fs.read endpoint and both review verbs (GET bootstrap + POST decision). */
-  function stubReviewFetch(reviewResponse: unknown, ok = true): void {
-    vi.mocked(fetch).mockImplementation(((input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).startsWith(REVIEW_API_PATH)) return Promise.resolve(fetchResponse(reviewResponse, ok))
-      return Promise.resolve(fetchResponse({ ok: true, value: { kind: 'text', content: '# The plan', truncated: false } }))
-    }) as never)
-  }
-
   it('shows no bar without review state', async () => {
     stubReviewFetch({})
     render(createElement(PlanView, tabProps()))
@@ -213,6 +213,15 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
     expect(screen.queryByText('Approve')).toBeNull()
   })
 
+  it('the delegation button is hidden without the sessions service', async () => {
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({})
+    render(createElement(PlanView, tabProps()))
+    await screen.findByText(/Review this plan here/)
+    expect(screen.getByText('Approve')).toBeDefined()
+    expect(screen.queryByText('Execute in new chat')).toBeNull()
+  })
+
   it('follows the attached DSH locale: a zh service renders the Chinese copy', async () => {
     attachLocale({ getSnapshot: () => ({ active: 'zh' }) })
     try {
@@ -225,6 +234,96 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
       // The decision POST reported the zh locale to the host.
       const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
       expect(JSON.parse(String(init.body)).locale).toBe('zh')
+    } finally {
+      attachLocale(undefined)
+    }
+  })
+})
+
+describe('PlanView delegation (execute in a new conversation)', () => {
+  /** A structural sessions-service stub capturing the delegation calls. */
+  function sessionsStub(failure?: Error) {
+    const calls = {
+      created: [] as Array<{ cwd?: string } | undefined>,
+      prompts: [] as Array<{ text: string; mode: string }>,
+      opened: [] as string[],
+    }
+    const sessions = {
+      create: failure === undefined
+        ? vi.fn(async (opts?: { cwd?: string }) => { calls.created.push(opts); return 's2' })
+        : vi.fn(async (opts?: { cwd?: string }) => { calls.created.push(opts); throw failure }),
+      open: vi.fn((id: string) => { calls.opened.push(id) }),
+      list: { getSnapshot: () => ({ byId: { s1: { cwd: '/from-list' } } }) },
+      binding: vi.fn(() => ({
+        session: {
+          prompt: vi.fn(async (content: { type: 'text'; text: string }[], mode: string) => {
+            calls.prompts.push({ text: content[0]?.text ?? '', mode })
+            return { ok: true }
+          }),
+        },
+      })),
+    }
+    return { sessions, calls }
+  }
+
+  /** tabProps with the sessions service reachable through ctx.get. */
+  function propsWithSessions(sessions: unknown): TabComponentProps {
+    return tabProps({
+      ctx: {
+        get: (name: string) => (name === 'betterSidebar'
+          ? { features: ['updateTab', 'openFile'], openFile: vi.fn() }
+          : name === 'sessions' ? sessions : undefined),
+      } as unknown as TabComponentProps['ctx'],
+    })
+  }
+
+  it('settles delegated, queues the kickoff into a fresh session, and navigates there', async () => {
+    const { sessions, calls } = sessionsStub()
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithSessions(sessions)))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    await screen.findByText('Plan approved — execution continues in a new conversation.')
+    // The decision POST carried the third decision value (no feedback field).
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve_new_session', locale: 'en', id: 'r1' })
+    // The new conversation: same cwd as the planning session (from the list
+    // summary), kickoff anchored on the plan path, then navigation.
+    expect(calls.created).toEqual([{ cwd: '/from-list' }])
+    expect(calls.prompts).toHaveLength(1)
+    expect(calls.prompts[0]?.mode).toBe('queue')
+    expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
+    expect(calls.prompts[0]?.text).toContain('[Plan execution]')
+    expect(calls.opened).toEqual(['s2'])
+    expect(reviewStore.get()?.status).toBe('delegated')
+  })
+
+  it('surfaces a launch failure under the delegated status line', async () => {
+    const { sessions } = sessionsStub(new Error('workspace gone'))
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithSessions(sessions)))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    expect(await screen.findByText('Failed to start the execution conversation: workspace gone')).toBeDefined()
+    expect(screen.getByText('Plan approved — execution continues in a new conversation.')).toBeDefined()
+    expect(sessions.open).not.toHaveBeenCalled()
+  })
+
+  it('localizes the zh delegation copy end to end', async () => {
+    attachLocale({ getSnapshot: () => ({ active: 'zh' }) })
+    try {
+      const { sessions, calls } = sessionsStub()
+      reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+      stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+      render(createElement(PlanView, propsWithSessions(sessions)))
+      expect(await screen.findByText(/在此审阅计划/)).toBeDefined()
+      fireEvent.click(screen.getByText('新开对话执行'))
+      await screen.findByText('计划已批准——执行已移交到新对话。')
+      expect(calls.prompts[0]?.text).toContain('[计划执行]')
+      expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
+      expect(calls.opened).toEqual(['s2'])
     } finally {
       attachLocale(undefined)
     }

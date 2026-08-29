@@ -14,13 +14,15 @@ export interface ReviewState {
     id: string;
     path: string;
     title: string;
-    status: 'pending' | 'approved' | 'kept' | 'cancelled';
+    status: 'pending' | 'approved' | 'delegated' | 'kept' | 'cancelled';
 }
 /** The server→view frame carrying review state. */
 export interface ReviewFrame {
     kind: 'review';
     review: ReviewState | null;
 }
+/** The sidebar decision vocabulary the panel posts (mirrors the gate's). */
+export type ReviewDecision = 'approve' | 'keep' | 'approve_new_session';
 /** Whether an unknown wire value is a well-formed review state. */
 export declare function isReviewState(value: unknown): value is ReviewState;
 type Listener = () => void;
@@ -70,5 +72,5 @@ export declare function fetchReviewState(sessionId: string): Promise<void>;
  * @param reviewId - the reviewed delivery's id (stale-click guard).
  * @returns the outcome; failures keep the pending bar up for a retry.
  */
-export declare function submitReviewDecision(sessionId: string, decision: 'approve' | 'keep', feedback: string | undefined, reviewId: string): Promise<ReviewDecisionOutcome>;
+export declare function submitReviewDecision(sessionId: string, decision: ReviewDecision, feedback: string | undefined, reviewId: string): Promise<ReviewDecisionOutcome>;
 export {};

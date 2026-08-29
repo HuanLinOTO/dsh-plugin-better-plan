@@ -4,7 +4,7 @@ import { PlanReviewGate } from '../src/review-gate.ts'
 import { LocaleDirectory } from '../src/locale.ts'
 import { DELIVERY_WS_PATH, attachDeliverySocket, type DeliverySocket } from '../src/ws-route.ts'
 
-const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {} }
+const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {}, onDelegate: () => {} }
 
 /** A minimal fake socket capturing sends and lifecycle callbacks. */
 function fakeSocket(): DeliverySocket & { sent: string[]; closeCalls: Array<[number?, string?]>; emitClose(): void } {

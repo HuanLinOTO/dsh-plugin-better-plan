@@ -17,7 +17,7 @@ export interface ReviewState {
   id: string
   path: string
   title: string
-  status: 'pending' | 'approved' | 'kept' | 'cancelled'
+  status: 'pending' | 'approved' | 'delegated' | 'kept' | 'cancelled'
 }
 
 /** The server→view frame carrying review state. */
@@ -26,6 +26,9 @@ export interface ReviewFrame {
   review: ReviewState | null
 }
 
+/** The sidebar decision vocabulary the panel posts (mirrors the gate's). */
+export type ReviewDecision = 'approve' | 'keep' | 'approve_new_session'
+
 /** Whether an unknown wire value is a well-formed review state. */
 export function isReviewState(value: unknown): value is ReviewState {
   if (value === null || typeof value !== 'object') return false
@@ -33,7 +36,8 @@ export function isReviewState(value: unknown): value is ReviewState {
   return typeof record.id === 'string' && record.id !== ''
     && typeof record.path === 'string' && record.path !== ''
     && typeof record.title === 'string'
-    && (record.status === 'pending' || record.status === 'approved' || record.status === 'kept' || record.status === 'cancelled')
+    && (record.status === 'pending' || record.status === 'approved' || record.status === 'delegated'
+      || record.status === 'kept' || record.status === 'cancelled')
 }
 
 type Listener = () => void
@@ -111,7 +115,7 @@ export async function fetchReviewState(sessionId: string): Promise<void> {
  */
 export async function submitReviewDecision(
   sessionId: string,
-  decision: 'approve' | 'keep',
+  decision: ReviewDecision,
   feedback: string | undefined,
   reviewId: string,
 ): Promise<ReviewDecisionOutcome> {

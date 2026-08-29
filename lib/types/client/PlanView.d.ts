@@ -11,8 +11,11 @@
  *
  * The review state comes from the delivery WebSocket's review frames (via
  * the shared review store, restored by the attach replay after a refresh).
- * While a review is pending the bar offers Approve / Keep planning; a
- * decision POSTs to the host's review route and the echo updates the store.
+ * While a review is pending the bar offers Approve / Execute in new chat /
+ * Keep planning; a decision POSTs to the host's review route and the echo
+ * updates the store. The delegation choice then launches the execution
+ * conversation through the sessions service (see execution-launch.ts) and
+ * navigates there.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/PlanView
  */

@@ -80,6 +80,14 @@ export declare function localizedRenderContent(path: string, value: {
  */
 export declare function approvalSteerText(locale: PlanLocale): string;
 /**
+ * The steer message fired when the sidebar approval delegates execution to a
+ * new conversation: the planning session is closed out (plan mode off) and
+ * must NOT execute the plan itself.
+ * @param locale - the resolved session locale.
+ * @returns the steer text.
+ */
+export declare function delegatedSteerText(locale: PlanLocale): string;
+/**
  * The steer message fired when the sidebar keeps planning.
  * @param feedback - the user's optional feedback (already trimmed).
  * @param locale - the resolved session locale.

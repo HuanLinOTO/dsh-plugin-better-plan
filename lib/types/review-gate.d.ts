@@ -18,7 +18,9 @@
  * @module @huanlin/dsh-plugin-better-plan/review-gate
  */
 /** Lifecycle of one plan review (the wire status the plan panel renders). */
-export type ReviewStatus = 'pending' | 'approved' | 'kept' | 'cancelled';
+export type ReviewStatus = 'pending' | 'approved' | 'delegated' | 'kept' | 'cancelled';
+/** The sidebar decision vocabulary: how the plan panel settles a review. */
+export type ReviewDecision = 'approve' | 'keep' | 'approve_new_session';
 /** One review's user-visible state (the wire face of a review frame). */
 export interface ReviewState {
     /** The delivery id this review belongs to (stale-click guard). */
@@ -38,11 +40,13 @@ export interface ReviewFrame {
 export type ReviewSender = (frame: ReviewFrame) => void;
 /**
  * The decision side effects, wired by the tool that delivered the plan:
- * steer the outcome back to the model (approval also flips plan mode off).
+ * steer the outcome back to the model (approval also flips plan mode off;
+ * delegation flips it off too but hands execution to a new conversation).
  */
 export interface ReviewHandlers {
     onApprove(): void;
     onKeep(feedback: string | undefined): void;
+    onDelegate(): void;
 }
 /**
  * Per-session pending decision plus the attached view set. One pending
@@ -68,12 +72,13 @@ export declare class PlanReviewGate {
     /**
      * Settle the session's pending review from the sidebar decision.
      * @param sessionId - the session under review.
-     * @param decision - the user's choice.
+     * @param decision - the user's choice (approve_new_session settles as
+     *   `delegated`: execution continues in a new conversation).
      * @param feedback - optional keep-planning feedback (trimmed; forwarded to
      *   the model verbatim in the steer message).
      * @returns the settled review state, or undefined when nothing is pending.
      */
-    decide(sessionId: string, decision: 'approve' | 'keep', feedback?: string): ReviewState | undefined;
+    decide(sessionId: string, decision: ReviewDecision, feedback?: string): ReviewState | undefined;
     /**
      * Read the session's pending review (stale-click guard + GET bootstrap).
      * @param sessionId - the session to inspect.

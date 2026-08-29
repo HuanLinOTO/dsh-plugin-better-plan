@@ -11,7 +11,7 @@ import {
 } from '../src/review-route.ts'
 
 const REVIEW = { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }
-const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {} }
+const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {}, onDelegate: () => {} }
 
 /** A fake request: method/headers plus a one-chunk async body iterator. */
 function fakeRequest(body: unknown, headers: Record<string, string> = { host: '127.0.0.1:18080' }): ReviewHttpRequest {
@@ -59,13 +59,16 @@ describe('parseReviewDecisionBody', () => {
       .toEqual({ value: { session: 's1', decision: 'keep', feedback: 'f', id: 'd1', locale: 'zh-CN' } })
     expect(parseReviewDecisionBody('{"session":"s1","decision":"approve"}'))
       .toEqual({ value: { session: 's1', decision: 'approve' } })
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"approve_new_session"}'))
+      .toEqual({ value: { session: 's1', decision: 'approve_new_session' } })
   })
 
   it('rejects malformed JSON, non-objects, and invalid decisions', () => {
     expect(parseReviewDecisionBody('{').error).toBe('malformed JSON body')
     expect(parseReviewDecisionBody('7').error).toBe('the body must be a JSON object')
     expect(parseReviewDecisionBody('{"decision":"approve"}').error).toBe('session is required')
-    expect(parseReviewDecisionBody('{"session":"s1","decision":"maybe"}').error).toBe('decision must be "approve" or "keep"')
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"maybe"}').error)
+      .toBe('decision must be "approve", "keep", or "approve_new_session"')
   })
 })
 
@@ -81,10 +84,28 @@ describe('handleReviewRequest', () => {
   it('forwards keep feedback into the gate', async () => {
     const gate = new PlanReviewGate()
     const keeps: Array<string | undefined> = []
-    gate.begin('s1', REVIEW, { onApprove: () => {}, onKeep: (feedback) => { keeps.push(feedback) } })
+    gate.begin('s1', REVIEW, {
+      onApprove: () => {},
+      onKeep: (feedback) => { keeps.push(feedback) },
+      onDelegate: () => {},
+    })
     const res = await post(gate, { session: 's1', decision: 'keep', feedback: 'add tests' })
     expect(res.status).toBe(200)
     expect(keeps).toEqual(['add tests'])
+  })
+
+  it('settles approve_new_session as delegated and fires the delegate handler', async () => {
+    const gate = new PlanReviewGate()
+    let delegations = 0
+    gate.begin('s1', REVIEW, {
+      onApprove: () => {},
+      onKeep: () => {},
+      onDelegate: () => { delegations += 1 },
+    })
+    const res = await post(gate, { session: 's1', decision: 'approve_new_session', id: 'd1' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body ?? '{}')).toEqual({ ok: true, review: { ...REVIEW, status: 'delegated' } })
+    expect(delegations).toBe(1)
   })
 
   it('answers 409 with a stable code when nothing is pending', async () => {

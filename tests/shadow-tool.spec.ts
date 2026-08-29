@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from '../src/config.ts'
 import { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
 import {
-  approvalSteerText, keepPlanningSteerText, planReviewCopy,
+  approvalSteerText, delegatedSteerText, keepPlanningSteerText, planReviewCopy,
 } from '../src/locale.ts'
 import { PlanReviewGate } from '../src/review-gate.ts'
 import { REVIEW_ID, defineExitPlanTool, exitPlanDescription, reviewDetail } from '../src/shadow-tool.ts'
@@ -136,6 +136,18 @@ describe('the shadow tool definition (pure projections)', () => {
     expect(keepPlanningSteerText('补测试', 'zh')).toContain('用户的反馈：补测试。')
     expect(keepPlanningSteerText(undefined, 'zh')).not.toContain('用户的反馈')
     expect(keepPlanningSteerText(undefined, 'zh')).toContain('重新调用 exit_plan_mode 提交')
+  })
+
+  it('builds the delegation steer that closes the planning session without executing', () => {
+    const en = delegatedSteerText('en')
+    expect(en).toContain('approved the plan and chose to carry it out in a NEW conversation')
+    expect(en).toContain('do not execute the plan here')
+    expect(en).toContain('acknowledge briefly and end your turn')
+    const zh = delegatedSteerText('zh')
+    expect(zh).toContain('[计划审批]')
+    expect(zh).toContain('在一个新对话中执行')
+    expect(zh).toContain('不要在此会话中执行该计划')
+    expect(zh).toContain('简短确认收到后结束回合')
   })
 
   it('builds the localized no-sidebar review question (labels pair with the ask intent)', () => {

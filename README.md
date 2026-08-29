@@ -4,15 +4,16 @@
 
 # dsh-plugin-better-plan
 
-一个取代 DSH 内置 plan mode「计划交付体验」的插件：计划交付不再把全文渲染进聊天悬浮卡片，而是**先写成 markdown 文件，再经 better-sidebar 的专属「计划」面板展示，并在侧边栏完成审批**——计划送达侧边栏后对话直接停下，聊天里不弹审批卡；用户在 Plan 面板审阅全文后点 Approve / Keep planning 按钮。
+一个取代 DSH 内置 plan mode「计划交付体验」的插件：计划交付不再把全文渲染进聊天悬浮卡片，而是**先写成 markdown 文件，再经 better-sidebar 的专属「计划」面板展示，并在侧边栏完成审批**——计划送达侧边栏后对话直接停下，聊天里不弹审批卡；用户在 Plan 面板审阅全文后点 Approve / Execute in new chat / Keep planning 按钮。
 
-> Replaces the built-in plan mode's plan delivery: plans are written to a markdown file first and shown in the better-sidebar **Plan panel**, where the approval happens — a delivered plan parks the conversation with no popup in chat; the user reviews the full plan in the panel and clicks Approve / Keep planning there.
+> Replaces the built-in plan mode's plan delivery: plans are written to a markdown file first and shown in the better-sidebar **Plan panel**, where the approval happens — a delivered plan parks the conversation with no popup in chat; the user reviews the full plan in the panel and clicks Approve / Execute in new chat / Keep planning there.
 
 ## 功能
 
 - **文件先行**：内置 `exit_plan_mode` 的参数是完整计划正文；本插件以**同名工具逐 agent 遮蔽替换**（`agent/session-start` → `agent.ctx.tools.register`，跨 scope 层遮蔽 preset 挂载的原版），新契约只有一个 `path` 参数——模型先用 `write` 工具把完整计划写成 markdown，再传路径。
 - **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。
-- **侧边栏审批（送达时无聊天弹窗、对话直接停止）**：推送送达已连接的侧边栏视图后，工具**立即返回**「计划已呈现，请结束回合」——模型收尾结束对话，聊天里既没有审批卡也没有挂起的调用卡片。用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端：批准 → 立即落 `plan/mode: false` 并以 `agent.steer` 开启新回合让模型开始执行；保留 → 反馈经 steer 开新回合回给模型修改。审批语义与模式切换语义与原版一致。
+- **侧边栏审批（送达时无聊天弹窗、对话直接停止）**：推送送达已连接的侧边栏视图后，工具**立即返回**「计划已呈现，请结束回合」——模型收尾结束对话，聊天里既没有审批卡也没有挂起的调用卡片。用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **新开对话执行** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端：批准 → 立即落 `plan/mode: false` 并以 `agent.steer` 开启新回合让模型开始执行；保留 → 反馈经 steer 开新回合回给模型修改。审批语义与模式切换语义与原版一致。
+- **新开对话执行（delegation）**：第三个决定 `approve_new_session` 结算为 `delegated`——规划会话照常退出计划模式，但 steer 文案改为「计划移交新对话执行，本会话收尾即可」；同时面板经 DSH 公开 `ctx.sessions` 契约在**同一工作目录**新建空白会话，把 kickoff（指向计划文件的绝对路径 + 执行指令）作为首条用户消息排队发出并导航过去。新对话与用户手点「新建会话」完全同构（默认 preset），失败时状态行下就地报错、计划路径仍在面板可见，可手动重试。`ctx.sessions` 服务缺席时按钮不渲染；无侧边栏的聊天弹窗降级路径保持原版两选项。
 - **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段四处原版契约句子就地改写为文件先行契约：交付句改写为**同回合两步强制交付**（先写 `docs/plans/YYYY-MM-DD-<topic>.md`——日期 + 主题短横线命名，再立即调 `exit_plan_mode`）；原版「exit_plan_mode 是该回合唯一且最后的工具调用」句同步改写（否则模型把已发生的 write 视作违反该句，写完文件就停）；写禁句与规则压治句各带豁免。锚点句子只在计划模式激活时出现，无需自管状态。
 - **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版阻塞审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染（detail 是完整计划全文），批准后原样在回合内继续。
 - **审批状态双通道**：WS `review` 帧实时广播（多窗口同步、attach 回放恢复刷新）；Plan 面板挂载时再经 `GET /better-plan/api/review` 引导拉取一次（防丢帧；store 已有活动状态时让位，不会误清）。
@@ -29,7 +30,7 @@ src/
 ├── config.ts              # Config schema (Schemastery, strict) + resolveBetterPlanConfig
 ├── context.ts             # 插件视角的 Context face（cordis Context ∩ 结构化服务面）
 ├── shadow-tool.ts         # 同名 exit_plan_mode 工具定义（execute / render / presentCall / presentResult）
-├── review-gate.ts         # 审批门：per-session 停靠 + decide/attach 回放/abort/dispose 结算
+├── review-gate.ts         # 审批门：per-session 停靠 + decide（approve/keep/approve_new_session → delegated）+ attach 回放/abort/dispose 结算
 ├── review-route.ts        # POST /better-plan/api/review（信任栅栏 + 体校验 + 陈旧 id 守卫）
 ├── delivery-registry.ts   # per-session 推送队列 + 视图 attach（consume-on-send，队列上限 8）
 ├── ws-route.ts            # /better-plan/ws/delivery 升级路由 + tagged 帧（deliver/review）+ socket attach
@@ -39,9 +40,10 @@ src/
 ├── first-heading.ts       # 计划首 heading 提取（原版同款正则）+ basename
 └── client/
     ├── index.tsx          # client 入口: Plan tab 注册 + locale 词典注册 + 交付 WS 订阅 + tagged 帧分发
-    ├── PlanView.tsx       # 面板组件：状态头 + 审批动作栏 + MarkdownText 正文 + 加载/错误/重试
-    ├── locales.ts         # 面板双语词典（ctx.locale 注册 + 模块级 t()）+ 路由错误 code 映射
+    ├── PlanView.tsx       # 面板组件：状态头 + 审批动作栏（三决定，delegation 按能力渲染）+ MarkdownText 正文 + 加载/错误/重试
+    ├── locales.ts         # 面板双语词典（ctx.locale 注册 + 模块级 t()）+ 路由错误 code 映射 + delegation kickoff 文案
     ├── review-store.ts    # 审批状态外部 store + submitReviewDecision（POST 回宿主端，携带 locale）
+    ├── execution-launch.ts # delegation 流：ctx.sessions 结构化 face → 新建会话 + kickoff 排队 + 导航
     ├── markdown-props.ts  # 双形状 MarkdownText props（内联，不得 value-import better-sidebar 内部）
     └── icons.tsx          # 内联 SVG 图标
 tests/
@@ -52,7 +54,7 @@ tests/
 ├── delivery-registry.spec.ts / ws-route.spec.ts / trust-fence.spec.ts / resolve-cwd.spec.ts / first-heading.spec.ts
 └── client/
     ├── delivery.spec.ts   # WS tagged 帧 → openTab/updateTab/activateTab + review store 喂给
-    ├── plan-view.spec.tsx # PlanView 加载/错误/重试 + 审批动作栏 (jsdom)
+    ├── plan-view.spec.tsx # PlanView 加载/错误/重试 + 审批动作栏 + delegation 流 (jsdom)
     └── markdown-props.spec.ts
 ```
 
@@ -103,7 +105,7 @@ dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 
 ```sh
 pnpm run typecheck   # 类型门禁（host + client 两个 tsc 面）
-pnpm test            # 124 个单元/组合/组件测试
+pnpm test            # 132 个单元/组合/组件测试
 pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 ```
 
@@ -132,6 +134,7 @@ pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 5. **提示词面覆盖（真机走查发现）**：工具遮蔽生效后首测仍失败——preset 的 `plan:policy` 提示段教的是原版契约（「call exit_plan_mode with the complete plan markdown」+「Do not edit or write files」+「规则压过工具描述」），模型被两份矛盾指令夹住后写完文件直接收尾，从未调用交付工具。修复：`system-prompt/assemble` waterfall 监听器把该段三处句子就地改写为文件先行契约（`rewritePlanPolicySection` 锚点替换、幂等、缺锚跳过以兼容 preset 变体）。监听器必须逐 agent 注册在 `agent.ctx` 上——`assembleContextFor` 以 agent 为派发 key，scope 链准入只向上流，插件 fiber 上的全局注册会被过滤（测试固化了这一约束）。
 6. **审批面从聊天卡迁到侧边栏 + 交付不再阻塞（真机走查反馈）**：设计 §1/§11 曾把「Plan tab 内 Approve/Refuse 按钮」列为 v1 非目标（审批留在聊天审批条）。真机走查后按用户要求推翻并迭代两步：(a) 首版把工具调用停靠在审批门上等决定——被走查否决：聊天里留下一个永远「运行中」的卡片，观感即卡死，且用户此刻输入无处落地。(b) 终版：**送达后工具立即返回** `decision: 'pending'`，render 指示模型结束回合（对话自然停止）；用户在 Plan 面板动作栏决定后，宿主端**立即落 `plan/mode: false`（回合间 append，与原版控制器空闲时行为一致；失败退回 pendingExits 边界重试）并 `agent.steer` 开启新回合**把批准/反馈告诉模型（`steer` 契约：空闲 driver 直接开回合）。未送达时仍回退原版阻塞弹窗（detail=完整计划全文）。关键机制事实：阻塞工具 ≠ 停止对话——停止对话的唯一自然形态是模型停止调用工具，工具结果文本就是那个指令。
 7. **交付提示词二次加硬（真机走查反馈：模型光写文件不调工具）**：首轮提示词覆盖后模型仍写完计划文件就收尾、从不调用 `exit_plan_mode`。诊断出两处措辞缺陷：(a) 改写后的交付句以「When ready」开头——太软，模型自行判断「还没准备好」；(b) 致命的是原版**紧随其后的「Make exit_plan_mode the only and final tool call in that assistant response」句未被改写**——文件先行契约下 write 必然发生在 exit 调用之前，模型把已发生的 write 读成违反该句，于是直接停笔。修复（v0.2.1）：交付句改写为无条件**同回合两步强制契约**（写 `docs/plans/YYYY-MM-DD-<topic>.md`，日期+kebab-case 主题命名，紧跟 exit 调用；「写文件只是准备不是交付，写完不调工具的回合等于什么都没呈现」），final-call 句改写为「write 在前不失格，exit 是交付回合最后一个调用、其后无物」；工具 description 与 ENOENT 错误文本同步加硬（MANDATORY two-step + 命名示例 `2026-08-09-dsh-pet-rust-impl-spec.md`）。
+8. **第三个决定：新开对话执行（v0.4.0）**：审批动作栏增加 `approve_new_session`。宿主侧结算为新的 `delegated` 状态（`approved` 会谎称「模型正在本对话执行」），照常翻 `plan/mode: false` 但 steer 换成移交文案；新建会话放在 **client 侧**经公开 `ctx.sessions` 契约（`create({cwd})` → `binding().session.prompt(kickoff,'queue')` → `open`）完成，而非宿主 `agents.create`——与用户手点「新建会话」同构（默认 preset，无 provider/model 继承），无会话列表竞态，且零新增 peer 依赖（结构化 face，`ctx.get('sessions')` 缺席时按钮不渲染）。kickoff 是首条用户消息（指向计划文件绝对路径），cwd 取自 sessions 列表里规划会话的 summary。
 
 ## License
 

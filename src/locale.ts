@@ -134,6 +134,22 @@ export function approvalSteerText(locale: PlanLocale): string {
 }
 
 /**
+ * The steer message fired when the sidebar approval delegates execution to a
+ * new conversation: the planning session is closed out (plan mode off) and
+ * must NOT execute the plan itself.
+ * @param locale - the resolved session locale.
+ * @returns the steer text.
+ */
+export function delegatedSteerText(locale: PlanLocale): string {
+  if (locale === 'zh') {
+    return '[计划审批] 用户已批准该计划，并选择在一个新对话中执行它。本会话的规划任务已完成——'
+      + '不要在此会话中执行该计划；简短确认收到后结束回合即可。'
+  }
+  return '[Plan review] The user approved the plan and chose to carry it out in a NEW conversation. '
+    + 'Planning is complete in this one — do not execute the plan here; acknowledge briefly and end your turn.'
+}
+
+/**
  * The steer message fired when the sidebar keeps planning.
  * @param feedback - the user's optional feedback (already trimmed).
  * @param locale - the resolved session locale.

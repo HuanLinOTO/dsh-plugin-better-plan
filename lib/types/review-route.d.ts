@@ -3,10 +3,13 @@
  * that settles a parked plan review (the tab→host half of the sidebar
  * approval flow the chat popup used to own).
  *
- * The plan panel posts `{ session, decision, feedback?, id? }`; the route
- * settles the session's pending review through the {@link PlanReviewGate}
- * and echoes the settled state back so the submitting view (and, over the
- * delivery WebSocket, every other view) reflects the decision.
+ * The plan panel posts `{ session, decision, feedback?, id? }` (decision:
+ * approve / keep / approve_new_session); the route settles the session's
+ * pending review through the {@link PlanReviewGate} and echoes the settled
+ * state back so the submitting view (and, over the delivery WebSocket,
+ * every other view) reflects the decision. `approve_new_session` settles
+ * as `delegated`: the planning session is closed out with a handoff steer
+ * and the panel itself launches the execution conversation.
  *
  * The same browser-trust fence as the delivery WebSocket guards the route:
  * this is a DNS-rebinding / cross-site defense for a session-scoped command,
@@ -14,7 +17,7 @@
  *
  * @module @huanlin/dsh-plugin-better-plan/review-route
  */
-import type { PlanReviewGate } from './review-gate.ts';
+import type { PlanReviewGate, ReviewDecision } from './review-gate.ts';
 import type { LocaleDirectory } from './locale.ts';
 import { type FenceRequest } from './trust-fence.ts';
 /** The exact pathname the route registers on the host webServer. */
@@ -41,14 +44,7 @@ export interface ReviewApiRoute {
 /** One parsed review decision body. */
 export interface ReviewDecisionBody {
     session: string;
-    decision: 'approve' | 'keep';
-    feedback?: string;
-    id?: string;
-}
-/** One parsed review decision body. */
-export interface ReviewDecisionBody {
-    session: string;
-    decision: 'approve' | 'keep';
+    decision: ReviewDecision;
     feedback?: string;
     id?: string;
     /** The submitting view's active locale tag (BCP 47-style; optional). */

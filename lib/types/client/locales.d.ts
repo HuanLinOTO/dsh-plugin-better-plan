@@ -23,10 +23,14 @@ export declare const zhDict: {
     readonly copied: "已复制";
     readonly copy: "复制";
     readonly copiedLabel: "已复制";
-    readonly reviewHint: "在此审阅计划——聊天中不会弹出审批卡。点「批准」退出计划模式，或附反馈选择「继续规划」。";
+    readonly reviewHint: "在此审阅计划——聊天中不会弹出审批卡。点「批准」在本对话执行，点「新开对话执行」移到全新对话执行，或附反馈选择「继续规划」。";
     readonly feedbackPlaceholder: "「继续规划」时可附反馈（可选）…";
     readonly approve: "批准";
     readonly keepPlanning: "继续规划";
+    readonly approveNewSession: "新开对话执行";
+    readonly delegatingStatus: "计划已批准——正在新建执行对话…";
+    readonly delegatedStatus: "计划已批准——执行已移交到新对话。";
+    readonly errDelegateFailed: "新开执行对话失败";
     readonly approvedStatus: "计划已批准——模型正在执行该计划。";
     readonly keptStatus: "反馈已发送——模型正在修改计划。";
     readonly loading: "正在读取计划…";
@@ -69,6 +73,16 @@ export declare function activeLocale(): 'zh' | 'en';
  * @returns the localized string.
  */
 export declare function t(key: keyof PlanCopy): string;
+/**
+ * The kickoff prompt the delegation flow queues into the NEW conversation:
+ * the model there has no context, so the message anchors it on the approved
+ * plan file (an absolute path) and orders execution. It is both
+ * user-visible (a chat bubble) and model-directed, so it localizes with the
+ * view like the steer copy does.
+ * @param path - the absolute plan file path.
+ * @returns the kickoff prompt text.
+ */
+export declare function executionKickoffPrompt(path: string): string;
 /**
  * Localize one review-route error for the action bar: known error codes map
  * to copy; unknown codes fall back to the route's raw English message.

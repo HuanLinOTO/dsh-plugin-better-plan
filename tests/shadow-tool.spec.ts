@@ -19,11 +19,14 @@ function stubTool(): ReturnType<typeof defineExitPlanTool> {
 }
 
 describe('exitPlanDescription', () => {
-  it('carries the file-first, immediate-return end-turn contract', () => {
+  it('carries the mandatory two-step same-turn delivery contract', () => {
     const description = exitPlanDescription(resolveBetterPlanConfig({ planDir: 'docs/plans' }))
     expect(description).toMatch(/^Use only in plan mode\./)
-    expect(description).toContain('write tool')
-    expect(description).toContain('`docs/plans/YYYY-MM-DD-<topic>.md`')
+    expect(description).toContain('MANDATORY two-step delivery, both steps in the same turn')
+    expect(description).toContain('write the COMPLETE plan as markdown to `docs/plans/YYYY-MM-DD-<topic>.md`')
+    expect(description).toContain("`docs/plans/2026-08-09-dsh-pet-rust-impl-spec.md`")
+    expect(description).toContain("today's date")
+    expect(description).toContain('never end the turn with the plan file written but this tool not called')
     expect(description).toContain('sidebar plan panel')
     expect(description).toContain('returns immediately')
     expect(description).toContain('end your turn right after it and wait')

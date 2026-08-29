@@ -31,6 +31,14 @@ import type { Context as CordisContext } from '@deepseek-ai/cordis';
  */
 export declare const PLAN_DELIVERY_ANCHOR = "When ready, call exit_plan_mode with the complete plan markdown, starting with a # title.";
 /**
+ * The shipped sentence right after the delivery anchor, verbatim across the
+ * standard, ptc, and cordis presets. With the file-first contract the write
+ * tool call necessarily precedes exit_plan_mode in the delivery turn, so this
+ * "only and final tool call" sentence reads as forbidding exactly that call —
+ * the observed write-then-stop failure — and must be rewritten too.
+ */
+export declare const FINAL_CALL_ANCHOR = "Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval.";
+/**
  * Rewrite the shipped plan-mode guidance to the file-first delivery contract.
  * Each replacement is independent: a sentence whose anchor is absent (an
  * older or customized preset variant) is left as-is, and already-rewritten

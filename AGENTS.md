@@ -2,7 +2,7 @@
 
 ## 插件概览
 
-双半（host + client）DSH 插件，取代内置 plan mode 的计划交付与审批面：模型先把完整计划写成 markdown 文件，再调用同名 `exit_plan_mode({ path })`；插件读文件 → 经自有 WS 推送到 better-sidebar 的「Plan」tab。推送**送达已连接视图**时工具**立即返回** `decision: 'pending'`（render 指示模型结束回合——对话就此停止，聊天无弹窗也无挂起卡片），用户在 Plan 面板动作栏点 Approve / Keep planning（可附反馈），决定经 `POST /better-plan/api/review` 结算：批准 → 立即落 `plan/mode: false` + `agent.steer` 开新回合执行；保留 → steer 开新回合带回反馈。推送未送达时回退原版阻塞聊天审批卡（detail=完整计划全文）。审批语义与模式切换语义与原版一致。
+双半（host + client）DSH 插件，取代内置 plan mode 的计划交付与审批面：模型先把完整计划写成 markdown 文件（路径约定 `<planDir>/YYYY-MM-DD-<topic>.md`，默认 `docs/plans/`，日期+kebab-case 主题命名，提示词面与工具 description 双面强制），**同回合**再调用同名 `exit_plan_mode({ path })`；插件读文件 → 经自有 WS 推送到 better-sidebar 的「Plan」tab。推送**送达已连接视图**时工具**立即返回** `decision: 'pending'`（render 指示模型结束回合——对话就此停止，聊天无弹窗也无挂起卡片），用户在 Plan 面板动作栏点 Approve / Keep planning（可附反馈），决定经 `POST /better-plan/api/review` 结算：批准 → 立即落 `plan/mode: false` + `agent.steer` 开新回合执行；保留 → steer 开新回合带回反馈。推送未送达时回退原版阻塞聊天审批卡（detail=完整计划全文）。审批语义与模式切换语义与原版一致。
 
 ## 环境搭建（junction 建链）
 
@@ -49,7 +49,7 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 ## 机制锚点（改动前先读）
 
 - **同名遮蔽**：`agent/session-start` → `agent.ctx.effect(() => agent.ctx.tools.register(...))`。agent scope 层遮蔽 preset standing scope 层的内置注册；effect 绑 agent fiber，agent 释放即清理。幂等守卫用 per-agent `WeakSet`（不要用 `tools.get(name)` 判断——全局视图看不到 preset 层的内置工具，而带 scope 的视图会看到它导致永远跳过注册）。
-- **提示词面覆盖**：preset 的 `plan:policy` 段落教原版内联契约且禁写文件，与工具契约冲突 → `registerPlanPolicyOverride` 把 `system-prompt/assemble` waterfall 监听器**逐 agent 注册在 `agent.ctx`**。assemble 派发 key = agent 本身（`assembleContextFor` 返回 `{ agent, scope: agent }`），scope 链准入只向上流——挂在插件 fiber 上的注册会被过滤，**不要「简化」成全局注册**（有测试固化该约束）。改写是锚点句子替换（幂等、缺锚跳过，兼容 preset 变体）；锚点出现 ⇔ 计划模式激活，无需自管状态。
+- **提示词面覆盖**：preset 的 `plan:policy` 段落教原版内联契约且禁写文件，与工具契约冲突 → `registerPlanPolicyOverride` 把 `system-prompt/assemble` waterfall 监听器**逐 agent 注册在 `agent.ctx`**。assemble 派发 key = agent 本身（`assembleContextFor` 返回 `{ agent, scope: agent }`），scope 链准入只向上流——挂在插件 fiber 上的注册会被过滤，**不要「简化」成全局注册**（有测试固化该约束）。改写是锚点句子替换（幂等、缺锚跳过，兼容 preset 变体），共四处：交付句 → **同回合两步强制契约**（先写 `docs/plans/YYYY-MM-DD-<topic>.md`，日期+kebab-case 主题命名，紧跟 exit 调用；「写文件只是准备，写完不调工具 = 什么都没呈现」）；**原版「exit_plan_mode 是该回合唯一且最后的工具调用」句（`FINAL_CALL_ANCHOR`）必须一并改写**——文件先行下 write 先于 exit，该句原样保留会被模型读成「本回合不许再调工具」，正是「光 write 不 exit」的根因；写禁句与规则压治句各带豁免。锚点出现 ⇔ 计划模式激活，无需自管状态。
 - **模式切换**：preset isolate realm 的 `planMode` 服务对 agent ctx 不可见，不能调原版控制器。两条批准路径分工：**侧边栏批准**是回合间决定——直接 append `plan/mode: { active: false }`（与原版控制器空闲时行为一致），append 失败退回 `pendingExits` 记账由下个边界重试；**弹窗降级路径**的批准发生在回合内——仍走 `pendingExits` + 下一个被接受的 `agent/pre-step` 边界 append（WeakSet 记账、失败保留重试）。
 - **审批门（侧边栏审批面）**：推送 `delivered: true` 时 execute **不调 `userQuestions.ask`**（无聊天弹窗）、也**不阻塞**——立即返回 `decision: 'pending'`，render 指示模型结束回合（对话停止 = 模型停止调工具；阻塞工具只会留一张永远「运行中」的卡片，**不要改回停靠等待**）。`review-gate.begin(sessionId, review, handlers)` 只记录待决 + 广播 pending 帧；`decide()`（`POST /better-plan/api/review` 触发）结算状态并触发 handlers——`onApprove` 落模式翻转 + `agent.steer`（**空闲 driver 直接开新回合**，运行中则最近 step 注入）、`onKeep` 经 steer 带回反馈。 steer 消息用 `createUserMessage({ source: { kind: 'user' } })`（`/plan` 命令同款）。陈旧 `id` 守卫（409）防多窗口旧窗口误结算新计划；`dispose()` 结算 cancelled 且不触发 handlers。`delivered: false` 永远走原版 ask 弹窗——不要「统一」成 gate，无侧边栏环境会失去审批能力。
 - **client 半纯度门**：client bundle 禁止 value-import 其他插件/宿主内部模块。better-sidebar 的交互全部走 `ctx.betterSidebar` 方法；`markdownTextProps` 双形状逻辑内联在 `src/client/markdown-props.ts`（勿改成 import）。

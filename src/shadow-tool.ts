@@ -88,7 +88,8 @@ export function keepPlanningSteerText(feedback: string | undefined): string {
  * @returns the description string.
  */
 export function exitPlanDescription(config: BetterPlanConfig): string {
-  return `Use only in plan mode. Before calling, write the COMPLETE plan as markdown to a file with the write tool (e.g. \`${config.planDir}/YYYY-MM-DD-<topic>.md\`), then pass its path here. `
+  return `Use only in plan mode. MANDATORY two-step delivery, both steps in the same turn: (1) write the COMPLETE plan as markdown to \`${config.planDir}/YYYY-MM-DD-<topic>.md\` — YYYY-MM-DD is today's date and <topic> a short kebab-case slug of the plan subject (e.g. \`${config.planDir}/2026-08-09-dsh-pet-rust-impl-spec.md\`); (2) immediately after the write succeeds, call this tool with that path. `
+    + 'Writing the file alone delivers nothing — the call is the delivery; never end the turn with the plan file written but this tool not called. '
     + 'The plan opens in the sidebar plan panel and the call returns immediately — end your turn right after it and wait; the user reviews and '
     + 'decides there. Their decision arrives as the next message: approval switches plan mode off for you to carry out the plan; keep-planning '
     + 'feedback asks you to revise the file and present it again.'
@@ -197,7 +198,8 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
         const code = (error as NodeJS.ErrnoException).code
         if (code === 'ENOENT') {
           throw new Error(`${EXIT_PLAN_MODE} could not read the plan file "${args.path}" (resolved to "${absolute}"): it does not exist. `
-            + 'Write the COMPLETE plan as markdown to a file with the write tool first, then call exit_plan_mode with its path.')
+            + `Write the COMPLETE plan as markdown to a file with the write tool first (e.g. \`${config.planDir}/YYYY-MM-DD-<topic>.md\`), `
+            + 'then call exit_plan_mode with its path in the same turn.')
         }
         if (code === 'EACCES' || code === 'EPERM') {
           throw new Error(`the plan file "${absolute}" is not readable`)

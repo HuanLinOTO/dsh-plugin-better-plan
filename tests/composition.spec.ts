@@ -218,7 +218,8 @@ describe('shadow registration', () => {
     const agent = await agentWithSession(harness, 'shadow-1', { active: true })
     const scoped = agent.ctx.tools.get(EXIT_PLAN_MODE, agent)
     expect(scoped).toBeDefined()
-    expect(scoped?.description).toContain('write the COMPLETE plan as markdown to a file')
+    expect(scoped?.description).toContain('MANDATORY two-step delivery, both steps in the same turn')
+    expect(scoped?.description).toContain('write the COMPLETE plan as markdown to')
     expect(harness.ctx.tools.get(EXIT_PLAN_MODE)).toBeUndefined()
     // A second agent is shadowed independently (no duplicate-registration error).
     const second = await agentWithSession(harness, 'shadow-2', { active: true })
@@ -250,7 +251,7 @@ describe('shadow registration', () => {
     const assembly = await harness.ctx.systemPrompt.assemble({ agent, scope: agent })
     const section = assembly.sections.find(candidate => candidate.name === 'plan:policy')
     expect(section?.text).not.toContain(PLAN_DELIVERY_ANCHOR)
-    expect(section?.text).toContain('call exit_plan_mode with the path of the plan file you wrote')
+    expect(section?.text).toContain('Deliver the plan in the same turn you finish it')
   })
 })
 
@@ -327,6 +328,8 @@ describe('exit_plan_mode delivery flow', () => {
     expect(text).toContain('does-not-exist.md')
     expect(text).toContain(join(harness.dir, 'does-not-exist.md'))
     expect(text).toContain('Write the COMPLETE plan as markdown to a file with the write tool first')
+    expect(text).toContain('`docs/plans/YYYY-MM-DD-<topic>.md`')
+    expect(text).toContain('in the same turn')
   })
 
   it('refuses a plan file over the configured byte cap', async () => {

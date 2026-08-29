@@ -21,16 +21,27 @@ const SHIPPED_SECTION = [
 ].join('\n\n')
 
 describe('rewritePlanPolicySection', () => {
-  it('rewrites the shipped section to the file-first contract', () => {
+  it('rewrites the shipped section to the mandatory two-step same-turn contract', () => {
     const result = rewritePlanPolicySection(SHIPPED_SECTION, 'docs/plans')
-    // The inline-plan delivery sentence is gone, replaced by the path contract.
+    // The inline-plan delivery sentence is gone, replaced by the dated-path,
+    // same-turn contract.
     expect(result).not.toContain(PLAN_DELIVERY_ANCHOR)
-    expect(result).toContain('call exit_plan_mode with the path of the plan file you wrote')
+    expect(result).toContain('Deliver the plan in the same turn you finish it')
+    expect(result).toContain("`docs/plans/2026-08-09-dsh-pet-rust-impl-spec.md`")
+    expect(result).toContain("YYYY-MM-DD is today's date")
     expect(result).toContain('the complete plan markdown must already be in the file')
-    expect(result).toContain('Never paste the plan text into the tool call.')
+    expect(result).toContain('the plan text is never pasted into the tool call')
+    expect(result).toContain('Writing the plan file is preparation, not delivery')
+    expect(result).toContain('a turn that ends with the file written but exit_plan_mode not called has presented nothing')
+    // The shipped final-call sentence reads as "no other tool call this turn"
+    // and talks the model out of calling after the plan write — it must go.
+    expect(result).not.toContain('Make exit_plan_mode the only and final tool call')
+    expect(result).toContain('the write preceding it does not disqualify the call')
+    expect(result).toContain('implementation begins only in a later step after approval')
     // The write ban keeps standing but carves out the delivery file.
     expect(result).toContain('Do not edit or write files, change configuration')
     expect(result).toContain('this delivery write is allowed in plan mode')
+    expect(result).toContain('must follow the write in the same turn')
     expect(result).toContain('`docs/plans/YYYY-MM-DD-<topic>.md`')
     // The override claim keeps standing with its exception named.
     expect(result).toContain('those tools remain listed to keep the tool catalog unchanged.')
@@ -44,6 +55,7 @@ describe('rewritePlanPolicySection', () => {
   it('flows the configured planDir into the delivery example', () => {
     const result = rewritePlanPolicySection(SHIPPED_SECTION, 'plans')
     expect(result).toContain('`plans/YYYY-MM-DD-<topic>.md`')
+    expect(result).toContain('`plans/2026-08-09-dsh-pet-rust-impl-spec.md`')
     expect(result).not.toContain('docs/plans')
   })
 
@@ -89,7 +101,7 @@ describe('assemble waterfall', () => {
     const section = assembly.sections.find(candidate => candidate.name === 'plan:policy')
     expect(section?.text).toBeDefined()
     expect(section?.text).not.toContain(PLAN_DELIVERY_ANCHOR)
-    expect(section?.text).toContain('call exit_plan_mode with the path of the plan file you wrote')
+    expect(section?.text).toContain('Deliver the plan in the same turn you finish it')
   })
 
   it('does not reach assemblies dispatched outside the registered scope', async () => {

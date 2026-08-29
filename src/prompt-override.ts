@@ -35,6 +35,16 @@ import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 export const PLAN_DELIVERY_ANCHOR =
   'When ready, call exit_plan_mode with the complete plan markdown, starting with a # title.'
 
+/**
+ * The shipped sentence right after the delivery anchor, verbatim across the
+ * standard, ptc, and cordis presets. With the file-first contract the write
+ * tool call necessarily precedes exit_plan_mode in the delivery turn, so this
+ * "only and final tool call" sentence reads as forbidding exactly that call —
+ * the observed write-then-stop failure — and must be rewritten too.
+ */
+export const FINAL_CALL_ANCHOR =
+  'Make exit_plan_mode the only and final tool call in that assistant response: it presents the plan for approval, and implementation begins only in a later step after approval.'
+
 const WRITE_BAN_ANCHOR =
   'Do not edit or write files, change configuration, run formatters or code generation that rewrites tracked files, commit, or otherwise carry out the plan.'
 
@@ -58,7 +68,8 @@ export function rewritePlanPolicySection(text: string, planDir: string): string 
   const writeException =
     ` The one required exception is the delivery file: before calling exit_plan_mode, ` +
     `write the complete plan as markdown to a single file (for example ${deliveryExample}) ` +
-    'with the write tool; this delivery write is allowed in plan mode.'
+    'with the write tool; this delivery write is allowed in plan mode, and the delivery itself is ' +
+    'the exit_plan_mode call that must follow the write in the same turn.'
   if (result.includes(WRITE_BAN_ANCHOR) && !result.includes(writeException)) {
     result = result.replace(WRITE_BAN_ANCHOR, WRITE_BAN_ANCHOR + writeException)
   }
@@ -72,13 +83,31 @@ export function rewritePlanPolicySection(text: string, planDir: string): string 
     result = result.replace(OVERRIDE_CLAIM_ANCHOR, OVERRIDE_CLAIM_ANCHOR + overrideException)
   }
 
-  // Replace the inline-plan delivery sentence with the path-only contract.
+  // Replace the inline-plan delivery sentence with the mandatory two-step,
+  // same-turn contract: the dated/kebab-case file path convention, then the
+  // exit call immediately after the write. "When ready" is gone on purpose —
+  // delivery is unconditional once the plan is complete.
   const deliveryReplacement =
-    'When ready, call exit_plan_mode with the path of the plan file you wrote: the tool takes ' +
-    'only that path, and the complete plan markdown must already be in the file, starting with ' +
-    'a # title. Never paste the plan text into the tool call.'
+    'Deliver the plan in the same turn you finish it: first write the COMPLETE plan as markdown to ' +
+    `\`${planDir}/YYYY-MM-DD-<topic>.md\` (YYYY-MM-DD is today's date, <topic> a short kebab-case slug of the ` +
+    `plan subject, e.g. \`${planDir}/2026-08-09-dsh-pet-rust-impl-spec.md\`), then call exit_plan_mode with that ` +
+    'path — the tool takes only the path, the complete plan markdown must already be in the file starting with ' +
+    'a # title, and the plan text is never pasted into the tool call. Writing the plan file is preparation, not ' +
+    'delivery: a turn that ends with the file written but exit_plan_mode not called has presented nothing.'
   if (result.includes(PLAN_DELIVERY_ANCHOR)) {
     result = result.replace(PLAN_DELIVERY_ANCHOR, deliveryReplacement)
+  }
+
+  // Rewrite the "only and final tool call" sentence: under the file-first
+  // contract the plan write precedes the call, so the shipped wording forbids
+  // the very call it mandates — the model reads the contradiction and stops
+  // after the write. State the correct ordering explicitly instead.
+  const finalCallReplacement =
+    'exit_plan_mode is the final tool call of the delivery turn, made immediately after the plan write — ' +
+    'the write preceding it does not disqualify the call; nothing may follow it, and implementation begins ' +
+    'only in a later step after approval.'
+  if (result.includes(FINAL_CALL_ANCHOR)) {
+    result = result.replace(FINAL_CALL_ANCHOR, finalCallReplacement)
   }
 
   return result
@@ -99,7 +128,7 @@ export function registerPlanPolicyOverride(ctx: CordisContext, planDir: string):
   return ctx.on('system-prompt/assemble', async (assembly: PromptAssembly, _context, next) => {
     const result = await next()
     for (const section of result.sections) {
-      if (section.text.includes(PLAN_DELIVERY_ANCHOR)) {
+      if (section.text.includes(PLAN_DELIVERY_ANCHOR) || section.text.includes(FINAL_CALL_ANCHOR)) {
         section.text = rewritePlanPolicySection(section.text, planDir)
       }
     }

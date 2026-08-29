@@ -12,11 +12,13 @@
  *
  * What changes is the delivery: the model must write the COMPLETE plan to a
  * markdown file first (guided by this description — D2 verifies only that the
- * file exists and is readable), then pass its path. The tool reads the file,
- * pushes it to the session's sidebar plan panel through the delivery
- * registry, and asks the SAME plan-review question the built-in tool asks —
- * with a compact pointer as the detail when the push was delivered, the full
- * plan text otherwise (no sidebar environment ⇒ the original experience).
+ * file exists and is readable), then pass its path. The tool reads the file
+ * and pushes it to the session's sidebar plan panel through the delivery
+ * registry. When the push reached a connected sidebar view the tool call
+ * PARKS on the review gate — the conversation stops with no approval popup,
+ * and the user reviews the plan and decides in the sidebar plan panel. When
+ * no view is attached the built-in plan-review question renders in chat with
+ * the full plan text (no-sidebar environment ⇒ the original experience).
  *
  * Approval keeps the built-in approval semantics AND the built-in mode
  * switch: the preset realm's `planMode` service is invisible to this plugin,
@@ -41,6 +43,7 @@ import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { BetterPlanConfig } from './config.ts'
 import type { Context } from './context.ts'
 import type { PlanDeliveryRegistry } from './delivery-registry.ts'
+import type { PlanReviewGate } from './review-gate.ts'
 import { basenameOf, firstHeading } from './first-heading.ts'
 import { resolveSessionCwd } from './resolve-cwd.ts'
 
@@ -67,18 +70,14 @@ export function exitPlanDescription(config: BetterPlanConfig): string {
 }
 
 /**
- * The review question's detail: a one-line pointer when the push reached a
- * connected sidebar view, the full plan text otherwise (D3 — without the
- * sidebar the user must still see the plan on the approval card).
- * @param delivered - whether the plan was pushed to a connected view.
- * @param plan - the full plan markdown (the fallback detail).
- * @param path - the resolved absolute plan path.
+ * The review question's detail: the full plan text. Only the no-sidebar
+ * fallback reaches the question (a delivered plan parks on the review gate
+ * instead), so the user always sees the whole plan on the popup card.
+ * @param plan - the full plan markdown.
  * @returns the detail string for the plan-review question.
  */
-export function reviewDetail(delivered: boolean, plan: string, path: string): string {
-  return delivered
-    ? `The complete plan is open in the sidebar plan panel (${path}). Approve to leave plan mode and carry it out, or keep planning with feedback.`
-    : plan
+export function reviewDetail(plan: string): string {
+  return plan
 }
 
 /** The model-facing render of an approved delivery. */
@@ -99,6 +98,8 @@ export interface ShadowToolDeps {
   config: BetterPlanConfig
   /** The delivery registry (per-session queue + views). */
   registry: PlanDeliveryRegistry
+  /** The sidebar review gate (parks a delivered call until the user decides). */
+  reviewGate: PlanReviewGate
   /** Whether the plugin fiber was disposed while a review may be pending. */
   isDisposed: () => boolean
   /** Queue the approved mode flip for the next accepted pre-step boundary. */
@@ -173,7 +174,19 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       }
       const plan = await readFile(absolute, 'utf8')
       const title = firstHeading(plan) ?? basenameOf(absolute)
-      const { delivered } = registry.enqueue(sessionId, absolute, title)
+      const { id, delivered } = registry.enqueue(sessionId, absolute, title)
+      if (delivered) {
+        // Sidebar review: park the call. The conversation stops here — no
+        // approval popup renders in chat — and the user decides in the plan
+        // panel. Keep/cancel/abort reject with the popup flow's wording, so
+        // the model sees identical guidance from either review surface.
+        await deps.reviewGate.begin(sessionId, { id, path: absolute, title }, exec.signal)
+        // Queue the mode flip for the next accepted pre-step boundary (the
+        // preset realm's planMode service is unreachable from here). The
+        // tool result is the narration, so no extra notice is injected.
+        deps.onApproved(agent.session)
+        return { approved: true as const, delivered: true }
+      }
       const interaction = ctx.get('userQuestions')
       if (interaction === undefined) {
         throw new Error('no user-questions channel is available to review the plan; ask the user to switch the session mode instead')
@@ -183,7 +196,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
           id: REVIEW_ID,
           header: 'Plan review',
           question: 'Approve this plan and leave plan mode?',
-          detail: reviewDetail(delivered, plan, absolute),
+          detail: reviewDetail(plan),
           options: [
             { label: APPROVE_LABEL, description: 'Leave plan mode; the plan is carried out from the next step.' },
             { label: KEEP_PLANNING_LABEL, description: 'Stay in plan mode; feedback goes back to the model.' },
@@ -233,7 +246,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       kind: 'other',
       content: [{
         type: 'text',
-        text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning below.',
+        text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning there.',
       }],
     }),
     presentResult: (_args, result) => ({

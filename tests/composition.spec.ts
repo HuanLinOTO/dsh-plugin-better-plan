@@ -18,6 +18,10 @@ import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
 import { PLAN_DELIVERY_ANCHOR } from '../src/prompt-override.ts'
 import * as betterPlan from '../src/index.ts'
+import { resolveBetterPlanConfig } from '../src/config.ts'
+import type { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
+import type { PlanReviewGate, ReviewFrame } from '../src/review-gate.ts'
+import { REVIEW_API_PATH, type ReviewHttpRequest, type ReviewHttpResponse } from '../src/review-route.ts'
 import { DELIVERY_WS_PATH } from '../src/ws-route.ts'
 
 /**
@@ -25,8 +29,13 @@ import { DELIVERY_WS_PATH } from '../src/ws-route.ts'
  * `SystemPrompt` / `ToolRuntime` / `AgentRegistry` / `UserQuestionService`
  * services, with fake Agents carrying real `Session`s and a real scoped
  * `agent.ctx` minted through `createScope`. The webServer is a capturing
- * fake (the WS route registration is asserted; socket traffic lives in the
+ * fake (route registrations are asserted; socket traffic lives in the
  * ws-route unit tests).
+ *
+ * `setup` mounts through `ctx.plugin` (the real loader path). `setupDirect`
+ * calls `createBetterPlan` directly to reach the delivery registry / review
+ * gate for the sidebar-review flow tests (attaching a fake view is what the
+ * real WebSocket would do).
  */
 
 const CONFIG = { planDir: 'docs/plans', maxPlanBytes: 262144 }
@@ -36,11 +45,18 @@ interface CapturedUpgrade {
   handler: (req: { url?: string; headers: Record<string, string> }, socket: { destroy(): void }, head: Uint8Array) => void | Promise<void>
 }
 
+interface CapturedRoute {
+  kind: 'exact' | 'prefix'
+  path: string
+  handler: (req: ReviewHttpRequest, res: ReviewHttpResponse) => void | Promise<void>
+}
+
 interface Harness {
   ctx: Context
   fiber: { dispose(): Promise<void> | void }
   asked: AskUserQuestionRequest[]
   upgrades: CapturedUpgrade[]
+  routes: CapturedRoute[]
   dir: string
 }
 
@@ -52,12 +68,24 @@ afterEach(async () => {
   await Promise.all(tmpDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
 })
 
-async function setup(answer?: AnswerFactory, config: Partial<typeof CONFIG> = {}): Promise<Harness> {
+/** Mount the real services and the capturing webServer fake. */
+async function mountCore(answer?: AnswerFactory): Promise<{
+  ctx: Context
+  asked: AskUserQuestionRequest[]
+  upgrades: CapturedUpgrade[]
+  routes: CapturedRoute[]
+  dir: string
+}> {
   const ctx = new Context()
   const upgrades: CapturedUpgrade[] = []
+  const routes: CapturedRoute[] = []
   ctx.provide('webServer', {
     registerUpgrade: (route: CapturedUpgrade) => {
       upgrades.push(route)
+      return () => {}
+    },
+    register: (route: CapturedRoute) => {
+      routes.push(route)
       return () => {}
     },
   })
@@ -71,10 +99,25 @@ async function setup(answer?: AnswerFactory, config: Partial<typeof CONFIG> = {}
     if (answer === undefined) throw new Error('no answerer in this test')
     return answer(request)
   })
-  const fiber = await ctx.plugin(betterPlan, { ...CONFIG, ...config })
   const dir = await mkdtemp(join(tmpdir(), 'better-plan-'))
   tmpDirs.push(dir)
-  return { ctx, fiber, asked, upgrades, dir }
+  return { ctx, asked, upgrades, routes, dir }
+}
+
+async function setup(answer?: AnswerFactory, config: Partial<typeof CONFIG> = {}): Promise<Harness> {
+  const core = await mountCore(answer)
+  const fiber = await core.ctx.plugin(betterPlan, { ...CONFIG, ...config })
+  return { ...core, fiber }
+}
+
+/** Mount the plugin body directly, exposing the registry and the review gate. */
+async function setupDirect(config: Partial<typeof CONFIG> = {}): Promise<Harness & {
+  registry: PlanDeliveryRegistry
+  reviewGate: PlanReviewGate
+}> {
+  const core = await mountCore(undefined)
+  const { registry, reviewGate } = betterPlan.createBetterPlan(core.ctx as unknown as Parameters<typeof betterPlan.createBetterPlan>[0], resolveBetterPlanConfig({ ...CONFIG, ...config }))
+  return { ...core, fiber: { dispose() {} }, registry, reviewGate }
 }
 
 async function agentWithSession(
@@ -133,10 +176,44 @@ async function boundary(harness: Harness, agent: Agent & { session: Session }): 
   )
 }
 
+/** Wait for a condition that becomes true across I/O ticks. */
+async function waitFor(condition: () => boolean): Promise<void> {
+  for (let waited = 0; !condition() && waited < 200; waited++) {
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  expect(condition()).toBe(true)
+}
+
+/** A fake review POST request (one-chunk body iterator). */
+function fakeReviewRequest(body: unknown): ReviewHttpRequest {
+  const raw = JSON.stringify(body)
+  return {
+    method: 'POST',
+    url: REVIEW_API_PATH,
+    headers: { host: '127.0.0.1:18080' },
+    [Symbol.asyncIterator]: async function * (): AsyncIterableIterator<Uint8Array | string> {
+      yield Buffer.from(raw, 'utf8')
+    },
+  }
+}
+
+/** Post one review decision through the plugin's captured HTTP route. */
+async function postDecision(harness: Harness, body: unknown): Promise<{ status?: number; body?: string }> {
+  const route = harness.routes.find(candidate => candidate.path === REVIEW_API_PATH)
+  if (route === undefined) throw new Error('the review route is not registered')
+  const res: { status?: number; body?: string; writeHead(status: number, headers?: Record<string, string>): void; end(body?: string): void } = {
+    writeHead(status) { res.status = status },
+    end(body) { res.body = body },
+  }
+  await route.handler(fakeReviewRequest(body), res)
+  return res
+}
+
 describe('shadow registration', () => {
-  it('registers the delivery route on the webServer', async () => {
+  it('registers the delivery WebSocket and the review API route on the webServer', async () => {
     const harness = await setup()
     expect(harness.upgrades.map(route => route.path)).toEqual([DELIVERY_WS_PATH])
+    expect(harness.routes.map(route => route.path)).toEqual([REVIEW_API_PATH])
   })
 
   it('shadows exit_plan_mode in every started agent and leaves the global layer alone', async () => {
@@ -340,5 +417,76 @@ describe('exit_plan_mode delivery flow', () => {
     agent.session.append = original
     await boundary(harness, agent)
     expect(foldPlanMode(agent.session.events)).toBe(false)
+  })
+})
+
+describe('sidebar review flow (a connected view parks the call, no popup)', () => {
+  it('approve: parks silently, the route decision settles it, and the mode flips at the boundary', async () => {
+    const harness = await setupDirect()
+    const sessionId = 'side-approve-1'
+    const deliveries: unknown[] = []
+    const reviews: ReviewFrame[] = []
+    const detachDelivery = harness.registry.attach(sessionId, delivery => deliveries.push(delivery))
+    const detachReview = harness.reviewGate.attach(sessionId, frame => reviews.push(frame))
+    const planPath = join(harness.dir, 'plan.md')
+    await writeFile(planPath, '# The plan\n\ndo things', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+
+    const pending = callExit(harness, agent, 'plan.md')
+    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
+
+    // No chat popup: the question channel never fired.
+    expect(harness.asked).toHaveLength(0)
+    // The plan panel saw the delivery and the pending review.
+    expect(deliveries).toHaveLength(1)
+    expect(reviews.map(frame => frame.review === null ? null : frame.review?.status ?? null)).toEqual([null, 'pending'])
+
+    const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
+    expect(res.status).toBe(200)
+    const result = await pending
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected approved result')
+    expect(result.value).toEqual({ approved: true, delivered: true })
+    // The decision broadcast reaches the view, and the flip lands at the boundary.
+    expect(reviews.at(-1)?.review?.status).toBe('approved')
+    expect(foldPlanMode(agent.session.events)).toBe(true)
+    await boundary(harness, agent)
+    expect(foldPlanMode(agent.session.events)).toBe(false)
+    detachDelivery()
+    detachReview()
+  })
+
+  it('keep planning from the sidebar returns the corrective error and never queues the flip', async () => {
+    const harness = await setupDirect()
+    const sessionId = 'side-keep-1'
+    harness.registry.attach(sessionId, () => {})
+    harness.reviewGate.attach(sessionId, () => {})
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+    const pending = callExit(harness, agent, 'plan.md')
+    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
+    const res = await postDecision(harness, { session: sessionId, decision: 'keep', feedback: 'consider the resume path' })
+    expect(res.status).toBe(200)
+    const result = await pending
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'Error: The user chose to keep planning; their feedback: consider the resume path' }])
+    await boundary(harness, agent)
+    expect(foldPlanMode(agent.session.events)).toBe(true)
+  })
+
+  it('stopping the turn (abort) cancels the parked review with its own message', async () => {
+    const harness = await setupDirect()
+    const sessionId = 'side-abort-1'
+    harness.registry.attach(sessionId, () => {})
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
+    const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
+    const controller = new AbortController()
+    const pending = callExit(harness, agent, 'plan.md', controller.signal)
+    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
+    controller.abort(new Error('user stopped the turn'))
+    const result = await pending
+    expect(result.isError).toBe(true)
+    expect(result.content).toEqual([{ type: 'text', text: 'Error: user stopped the turn' }])
+    expect(foldPlanMode(agent.session.events)).toBe(true)
   })
 })

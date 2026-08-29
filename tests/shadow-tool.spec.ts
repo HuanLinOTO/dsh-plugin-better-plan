@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from '../src/config.ts'
 import { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
+import { PlanReviewGate } from '../src/review-gate.ts'
 import { APPROVE_LABEL, KEEP_PLANNING_LABEL, REVIEW_ID, defineExitPlanTool, exitPlanDescription, reviewDetail } from '../src/shadow-tool.ts'
 
 const CONFIG: BetterPlanConfig = resolveBetterPlanConfig({})
@@ -11,6 +12,7 @@ function stubTool(): ReturnType<typeof defineExitPlanTool> {
     ctx: {} as never,
     config: CONFIG,
     registry: new PlanDeliveryRegistry(),
+    reviewGate: new PlanReviewGate(),
     isDisposed: () => false,
     onApproved: () => {},
   })
@@ -27,18 +29,10 @@ describe('exitPlanDescription', () => {
   })
 })
 
-describe('reviewDetail (D3 branch selection)', () => {
-  const plan = '# The plan\n\ndo things'
-
-  it('returns the one-line pointer with the path when delivered', () => {
-    const detail = reviewDetail(true, plan, '/repo/docs/plans/p.md')
-    expect(detail).toContain('sidebar plan panel')
-    expect(detail).toContain('/repo/docs/plans/p.md')
-    expect(detail).not.toContain('do things')
-  })
-
-  it('falls back to the full plan text when not delivered', () => {
-    expect(reviewDetail(false, plan, '/repo/docs/plans/p.md')).toBe(plan)
+describe('reviewDetail (D3: the popup fallback carries the full plan)', () => {
+  it('is the full plan text (only the no-sidebar fallback reaches the question)', () => {
+    const plan = '# The plan\n\ndo things'
+    expect(reviewDetail(plan)).toBe(plan)
   })
 })
 
@@ -58,7 +52,7 @@ describe('the shadow tool definition (pure projections)', () => {
       card: 'generic',
       title: '2026-08-29-topic.md',
       kind: 'other',
-      content: [{ type: 'text', text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning below.' }],
+      content: [{ type: 'text', text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning there.' }],
     })
     // The card never carries the plan body (compact by design).
     expect(JSON.stringify(view)).not.toContain('# The plan')

@@ -13,9 +13,11 @@
  * Delivery pipeline (execute): validate plan mode → resolve the path against
  * the session cwd → stat/read with a byte cap → enqueue a push on the
  * per-session delivery registry (consumed by the `/better-plan/ws/delivery`
- * WebSocket when a sidebar view is attached) → ask the SAME plan-review
- * question the built-in tool asks, with a compact pointer as the detail when
- * the push was delivered and the full plan text otherwise (D3: without the
+ * WebSocket when a sidebar view is attached) → when the push reached a view,
+ * PARK the call on the review gate: the conversation stops with no approval
+ * popup and the user decides in the plan panel (`POST /better-plan/api/review`
+ * settles it); when no view is attached, ask the SAME plan-review question
+ * the built-in tool asks, with the full plan as the detail (D3: without the
  * sidebar the user still reviews the plan on the card).
  *
  * Approval queueing the mode flip: the preset realm's `planMode` service is
@@ -33,6 +35,7 @@
 import type { Context } from './context.ts';
 import { type BetterPlanConfig } from './config.ts';
 import { PlanDeliveryRegistry } from './delivery-registry.ts';
+import { PlanReviewGate } from './review-gate.ts';
 export declare const name = "dsh-plugin-better-plan";
 /**
  * Services required before mounting: the tool registry (its availability
@@ -49,9 +52,12 @@ export type { BetterPlanConfig } from './config.ts';
  * `ctx`'s own fiber and cleans up on disposal (HMR-safe).
  * @param ctx - the host plugin context.
  * @param config - the resolved plugin config.
- * @returns the created delivery registry (exposed for tests).
+ * @returns the created delivery registry and review gate (exposed for tests).
  */
-export declare function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDeliveryRegistry;
+export declare function createBetterPlan(ctx: Context, config: BetterPlanConfig): {
+    registry: PlanDeliveryRegistry;
+    reviewGate: PlanReviewGate;
+};
 /**
  * Plugin entry.
  * @param ctx - the host plugin context.

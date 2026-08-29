@@ -1,12 +1,18 @@
 /**
- * The Plan tab view: a status header (title, path, actions) over the plan
- * rendered through DSH's shared `MarkdownText`.
+ * The Plan tab view: a status header (title, path, actions), the review
+ * action bar (the sidebar approval surface — the chat shows no popup), and
+ * the plan rendered through DSH's shared `MarkdownText`.
  *
  * The file content comes from better-sidebar's `/sidebar/api/fs.read` route
  * (same-origin, browser-authenticated) — the plan file lives in the session
  * workspace, and the host half has no route of its own for reading it. The
  * path is `tab.meta.path` (persisted with the tab, so a refresh restores the
  * view) falling back to `tab.path`.
+ *
+ * The review state comes from the delivery WebSocket's review frames (via
+ * the shared review store, restored by the attach replay after a refresh).
+ * While a review is pending the bar offers Approve / Keep planning; a
+ * decision POSTs to the host's review route and the echo updates the store.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/PlanView
  */

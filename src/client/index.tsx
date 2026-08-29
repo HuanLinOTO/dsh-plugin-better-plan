@@ -1,7 +1,7 @@
 /**
  * Client half of @huanlin/dsh-plugin-better-plan: registers the sidebar's
  * "Plan" tab through better-sidebar's service and subscribes the per-session
- * delivery WebSocket that opens it.
+ * delivery WebSocket that opens it and feeds its review action bar.
  *
  * The tab is `single: true` (one Plan tab per session, dedupe-focused on
  * repeat deliveries). Because the dedupe focus does NOT overwrite an already
@@ -9,7 +9,10 @@
  * v0.12.0+) so a re-delivered plan replaces the tab's content, then
  * `activateTab` focuses it. `meta` rides the tab into better-sidebar's
  * localStorage persistence, so a refresh restores the view and PlanView
- * re-reads the file from `tab.meta.path`.
+ * re-reads the file from `tab.meta.path`. Review frames feed the shared
+ * review store; the tab's action bar posts decisions back to
+ * `POST /better-plan/api/review` — the sidebar IS the approval surface, the
+ * chat shows no popup.
  *
  * With better-sidebar absent this half stays pending on its inject (legal
  * per the client runner) and, defensively, apply() skips everything when the
@@ -28,6 +31,7 @@ import type {} from 'dsh-better-sidebar/client/service'
 import type { BetterSidebarService } from 'dsh-better-sidebar/client/service'
 import { IconPlanOutline16 } from './icons.tsx'
 import { PlanView } from './PlanView.tsx'
+import { isReviewState, ReviewStore, reviewStore } from './review-store.ts'
 
 /** The Plan tab type id (also the minted tab id — single instance). */
 export const TAB_ID = 'better-plan:plan'
@@ -61,6 +65,29 @@ export function applyDeliveryPush(service: BetterSidebarService, payload: unknow
     service.updateTab(TAB_ID, { ...(title !== undefined ? { title } : {}), path: record.path, meta })
     service.activateTab(TAB_ID, scope)
   }
+}
+
+/**
+ * Route one WS frame: `deliver` opens/updates the Plan tab, `review` feeds
+ * the review store (the Plan tab's action bar). Malformed frames are ignored
+ * (the next push carries its own state).
+ * @param service - the better-sidebar service.
+ * @param store - the review store the review frames feed.
+ * @param frame - the parsed WS frame.
+ * @param sessionId - the session the socket is subscribed to.
+ */
+export function applyDeliveryFrame(service: BetterSidebarService, store: ReviewStore, frame: unknown, sessionId: string): void {
+  if (frame === null || typeof frame !== 'object') return
+  const kind = (frame as { kind?: unknown }).kind
+  if (kind === 'review') {
+    const review = (frame as { review?: unknown }).review
+    // `null` is the explicit clear; a malformed payload is ignored (the next
+    // frame carries its own state) so one bad frame cannot drop a live bar.
+    if (review === null) store.set(null)
+    else if (isReviewState(review)) store.set(review)
+    return
+  }
+  if (kind === 'deliver') applyDeliveryPush(service, frame, sessionId)
 }
 
 /** The betterSidebar service this half resolves through the context proxy. */
@@ -112,7 +139,7 @@ export function apply(ctx: Context): void {
       socket.onmessage = (event) => {
         if (typeof event.data !== 'string') return
         try {
-          applyDeliveryPush(betterSidebar, JSON.parse(event.data) as unknown, sessionId)
+          applyDeliveryFrame(betterSidebar, reviewStore, JSON.parse(event.data) as unknown, sessionId)
         } catch {
           // Malformed push: ignore (the next push carries its own delivery).
         }
@@ -129,11 +156,13 @@ export function apply(ctx: Context): void {
       socket.onerror = () => { socket?.close() }
     }
 
-    // Re-subscribe on session switches: the delivery queue is per session.
+    // Re-subscribe on session switches: the delivery queue and the review
+    // state are per session (the reconnect's attach replay restores both).
     const sync = (): void => {
       const sessionId = betterSidebar.getSnapshot().sessionId
       if (sessionId === current) return
       current = sessionId
+      reviewStore.reset()
       failures = 0
       if (sessionId === undefined) {
         clearRetry()

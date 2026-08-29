@@ -23,9 +23,16 @@ export interface BetterPlanUpgradeRoute {
         destroy(): void;
     }, head: Uint8Array) => void | Promise<void>;
 }
+/** The exact HTTP route face this plugin registers on the host webServer. */
+export interface BetterPlanHttpRoute {
+    kind: 'exact';
+    path: string;
+    handler: (req: never, res: never) => void | Promise<void>;
+}
 /** The webServer service face this plugin uses. */
 export interface BetterPlanWebServer {
     registerUpgrade(route: BetterPlanUpgradeRoute): () => void;
+    register(route: BetterPlanHttpRoute): () => void;
 }
 /** The web runtime trust list (bind-derived; absent on non-web hosts). */
 export interface BetterPlanWebRuntime {

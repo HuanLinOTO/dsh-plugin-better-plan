@@ -4,17 +4,17 @@
 
 # dsh-plugin-better-plan
 
-一个取代 DSH 内置 plan mode「计划交付体验」的插件：计划交付不再把全文渲染进聊天悬浮卡片，而是**先写成 markdown 文件，再经 better-sidebar 的专属「计划」面板展示**；聊天里只剩紧凑的「计划已交付」卡片，审批流与原版完全一致。
+一个取代 DSH 内置 plan mode「计划交付体验」的插件：计划交付不再把全文渲染进聊天悬浮卡片，而是**先写成 markdown 文件，再经 better-sidebar 的专属「计划」面板展示，并在侧边栏完成审批**——计划送达侧边栏后对话直接停下，聊天里不弹审批卡；用户在 Plan 面板审阅全文后点 Approve / Keep planning 按钮。
 
-> Replaces the built-in plan mode's plan delivery: plans are written to a markdown file first and shown in the better-sidebar **Plan panel**; chat keeps only a compact delivery card, and the approval flow is unchanged.
+> Replaces the built-in plan mode's plan delivery: plans are written to a markdown file first and shown in the better-sidebar **Plan panel**, where the approval happens — a delivered plan parks the conversation with no popup in chat; the user reviews the full plan in the panel and clicks Approve / Keep planning there.
 
 ## 功能
 
 - **文件先行**：内置 `exit_plan_mode` 的参数是完整计划正文；本插件以**同名工具逐 agent 遮蔽替换**（`agent/session-start` → `agent.ctx.tools.register`，跨 scope 层遮蔽 preset 挂载的原版），新契约只有一个 `path` 参数——模型先用 `write` 工具把完整计划写成 markdown，再传路径。
 - **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。
-- **审批流不变**：仍走 `userQuestions.ask` + `plan-review` 意图（Approve / Keep planning），workspace 树「计划待审」徽章、`/plan` 命令、投影全部保持原版。批准后由本插件在下一个 `agent/pre-step` 边界落 `plan/mode: false` 日志事件（与原版控制器的边界 append 同机制）。
+- **侧边栏审批（送达时无聊天弹窗）**：推送送达已连接的侧边栏视图后，工具调用**停在审批门上**——对话就此暂停，聊天流里不渲染任何审批卡；用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端结算审批门。审批语义与模式切换语义与原版完全一致（批准 → `{ approved: true }` + 下一个 pre-step 边界落 `plan/mode: false`；保留计划 → 带反馈的纠错错误回到模型）。审批状态经 WS 帧广播，页面刷新后 attach 回放恢复动作栏。
 - **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段中三处原版契约句子就地改写为文件先行契约；锚点句子只在计划模式激活时出现，无需自管状态。
-- **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，审批卡回退为**完整计划全文**——无侧边栏环境获得原版体验；送达时 detail 是一行指引 + 文件路径。
+- **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染，detail 是完整计划全文。
 - **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件。
 
 ## 开发
@@ -23,27 +23,31 @@
 
 ```
 src/
-├── index.ts               # host 入口: name/inject/Config/apply + 遮蔽挂接 + pre-step flush + WS 路由
+├── index.ts               # host 入口: name/inject/Config/apply + 遮蔽挂接 + pre-step flush + WS/HTTP 路由
 ├── config.ts              # Config schema (Schemastery, strict) + resolveBetterPlanConfig
 ├── context.ts             # 插件视角的 Context face（cordis Context ∩ 结构化服务面）
 ├── shadow-tool.ts         # 同名 exit_plan_mode 工具定义（execute / render / presentCall / presentResult）
+├── review-gate.ts         # 审批门：per-session 停靠 + decide/attach 回放/abort/dispose 结算
+├── review-route.ts        # POST /better-plan/api/review（信任栅栏 + 体校验 + 陈旧 id 守卫）
 ├── delivery-registry.ts   # per-session 推送队列 + 视图 attach（consume-on-send，队列上限 8）
-├── ws-route.ts            # /better-plan/ws/delivery 升级路由 + socket attach
+├── ws-route.ts            # /better-plan/ws/delivery 升级路由 + tagged 帧（deliver/review）+ socket attach
 ├── trust-fence.ts         # Host 回环 / trustedHosts 浏览器信任栅栏（对齐 /api 网关语义）
 ├── resolve-cwd.ts         # 会话 cwd 解析链（header → persistence → process.cwd）
 ├── first-heading.ts       # 计划首 heading 提取（原版同款正则）+ basename
 └── client/
-    ├── index.tsx          # client 入口: Plan tab 注册 + 交付 WS 订阅 + openTab/updateTab/activateTab
-    ├── PlanView.tsx       # 面板组件：状态头 + MarkdownText 正文 + 加载/错误/重试
+    ├── index.tsx          # client 入口: Plan tab 注册 + 交付 WS 订阅 + tagged 帧分发
+    ├── PlanView.tsx       # 面板组件：状态头 + 审批动作栏 + MarkdownText 正文 + 加载/错误/重试
+    ├── review-store.ts    # 审批状态外部 store + submitReviewDecision（POST 回宿主端）
     ├── markdown-props.ts  # 双形状 MarkdownText props（内联，不得 value-import better-sidebar 内部）
     └── icons.tsx          # 内联 SVG 图标
 tests/
-├── composition.spec.ts    # 组合层：真实 ToolRuntime/AgentRegistry/UserQuestionService 驱动 execute 全分支
-├── shadow-tool.spec.ts    # 工具契约：description / 紧凑卡投影 / render 双分支 / detail 选择
+├── composition.spec.ts    # 组合层：真实 ToolRuntime/AgentRegistry/UserQuestionService 驱动 execute 全分支（含侧边栏审批流）
+├── shadow-tool.spec.ts    # 工具契约：description / 紧凑卡投影 / render 双分支
+├── review-gate.spec.ts / review-route.spec.ts
 ├── delivery-registry.spec.ts / ws-route.spec.ts / trust-fence.spec.ts / resolve-cwd.spec.ts / first-heading.spec.ts
 └── client/
-    ├── delivery.spec.ts   # WS push → openTab + updateTab + activateTab 序列（service mock 按真实接口面）
-    ├── plan-view.spec.tsx # PlanView 加载/错误/重试 (jsdom)
+    ├── delivery.spec.ts   # WS tagged 帧 → openTab/updateTab/activateTab + review store 喂给
+    ├── plan-view.spec.tsx # PlanView 加载/错误/重试 + 审批动作栏 (jsdom)
     └── markdown-props.spec.ts
 ```
 
@@ -93,7 +97,7 @@ dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 
 ```sh
 pnpm run typecheck   # 类型门禁（host + client 两个 tsc 面）
-pnpm test            # 66 个单元/组合/组件测试
+pnpm test            # 105 个单元/组合/组件测试
 pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 ```
 
@@ -120,6 +124,7 @@ pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 3. **批准后的模式切换由本插件承载**：preset isolate realm 里的 `planMode` 服务对 agent ctx 不可见，无法直接驱动原版控制器的 `pendingIntents`。本插件以同机制补齐——`plan/mode: false` 延迟到下一个被接受的 `agent/pre-step` 边界 append（WeakSet 记账、append 失败保留重试、工具结果即叙述不额外注入）。语义与原版 execute 完全一致。
 4. **WS 路由加了信任栅栏**：设计未提及；比照 better-sidebar 的路由防护补齐（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname），防 DNS-rebinding 与跨站页面收割推送载荷。
 5. **提示词面覆盖（真机走查发现）**：工具遮蔽生效后首测仍失败——preset 的 `plan:policy` 提示段教的是原版契约（「call exit_plan_mode with the complete plan markdown」+「Do not edit or write files」+「规则压过工具描述」），模型被两份矛盾指令夹住后写完文件直接收尾，从未调用交付工具。修复：`system-prompt/assemble` waterfall 监听器把该段三处句子就地改写为文件先行契约（`rewritePlanPolicySection` 锚点替换、幂等、缺锚跳过以兼容 preset 变体）。监听器必须逐 agent 注册在 `agent.ctx` 上——`assembleContextFor` 以 agent 为派发 key，scope 链准入只向上流，插件 fiber 上的全局注册会被过滤（测试固化了这一约束）。
+6. **审批面从聊天卡迁到侧边栏（真机走查反馈）**：设计 §1/§11 曾把「Plan tab 内 Approve/Refuse 按钮」列为 v1 非目标（审批留在聊天审批条）。真机走查后按用户要求推翻：推送**送达已连接视图**时，工具调用停靠在 `review-gate` 上（对话直接暂停，聊天不渲染审批卡），用户在 Plan 面板动作栏点 Approve / Keep planning（可附反馈），决定经 `POST /better-plan/api/review` 结算；WS 广播 `review` 帧保持多窗口/刷新后状态一致（attach 回放）。**未送达时仍回退原版审批卡（detail=完整计划全文）**，无侧边栏环境的审批能力不丢失。错误文案与原版弹窗逐字一致，模型看到的纠错指引与决定面无关。
 
 ## License
 

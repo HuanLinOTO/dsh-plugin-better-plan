@@ -12,11 +12,13 @@
  *
  * What changes is the delivery: the model must write the COMPLETE plan to a
  * markdown file first (guided by this description — D2 verifies only that the
- * file exists and is readable), then pass its path. The tool reads the file,
- * pushes it to the session's sidebar plan panel through the delivery
- * registry, and asks the SAME plan-review question the built-in tool asks —
- * with a compact pointer as the detail when the push was delivered, the full
- * plan text otherwise (no sidebar environment ⇒ the original experience).
+ * file exists and is readable), then pass its path. The tool reads the file
+ * and pushes it to the session's sidebar plan panel through the delivery
+ * registry. When the push reached a connected sidebar view the tool call
+ * PARKS on the review gate — the conversation stops with no approval popup,
+ * and the user reviews the plan and decides in the sidebar plan panel. When
+ * no view is attached the built-in plan-review question renders in chat with
+ * the full plan text (no-sidebar environment ⇒ the original experience).
  *
  * Approval keeps the built-in approval semantics AND the built-in mode
  * switch: the preset realm's `planMode` service is invisible to this plugin,
@@ -35,6 +37,7 @@ import type { ToolDefinition } from '@deepseek-ai/dsh-tools';
 import type { BetterPlanConfig } from './config.ts';
 import type { Context } from './context.ts';
 import type { PlanDeliveryRegistry } from './delivery-registry.ts';
+import type { PlanReviewGate } from './review-gate.ts';
 /** The review question's id, echoed in the answer this tool reads. */
 export declare const REVIEW_ID = "plan-review";
 /** The review question's approve option label (the built-in wording). */
@@ -50,15 +53,13 @@ export declare const KEEP_PLANNING_LABEL = "Keep planning";
  */
 export declare function exitPlanDescription(config: BetterPlanConfig): string;
 /**
- * The review question's detail: a one-line pointer when the push reached a
- * connected sidebar view, the full plan text otherwise (D3 — without the
- * sidebar the user must still see the plan on the approval card).
- * @param delivered - whether the plan was pushed to a connected view.
- * @param plan - the full plan markdown (the fallback detail).
- * @param path - the resolved absolute plan path.
+ * The review question's detail: the full plan text. Only the no-sidebar
+ * fallback reaches the question (a delivered plan parks on the review gate
+ * instead), so the user always sees the whole plan on the popup card.
+ * @param plan - the full plan markdown.
  * @returns the detail string for the plan-review question.
  */
-export declare function reviewDetail(delivered: boolean, plan: string, path: string): string;
+export declare function reviewDetail(plan: string): string;
 /** Dependencies the shadow tool closes over (all provided by the plugin entry). */
 export interface ShadowToolDeps {
     /** The host plugin context (service reads at execute time). */
@@ -67,6 +68,8 @@ export interface ShadowToolDeps {
     config: BetterPlanConfig;
     /** The delivery registry (per-session queue + views). */
     registry: PlanDeliveryRegistry;
+    /** The sidebar review gate (parks a delivered call until the user decides). */
+    reviewGate: PlanReviewGate;
     /** Whether the plugin fiber was disposed while a review may be pending. */
     isDisposed: () => boolean;
     /** Queue the approved mode flip for the next accepted pre-step boundary. */

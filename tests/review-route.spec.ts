@@ -1,0 +1,130 @@
+import { describe, expect, it } from 'vitest'
+import { PlanReviewGate } from '../src/review-gate.ts'
+import {
+  REVIEW_API_PATH,
+  REVIEW_BODY_LIMIT,
+  handleReviewRequest,
+  parseReviewDecisionBody,
+  type ReviewHttpRequest,
+  type ReviewHttpResponse,
+} from '../src/review-route.ts'
+
+const REVIEW = { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }
+
+/** A fake request: method/headers plus a one-chunk async body iterator. */
+function fakeRequest(body: unknown, headers: Record<string, string> = { host: '127.0.0.1:18080' }): ReviewHttpRequest {
+  const raw = typeof body === 'string' ? body : JSON.stringify(body)
+  return {
+    method: 'POST',
+    url: REVIEW_API_PATH,
+    headers,
+    [Symbol.asyncIterator]: async function * (): AsyncIterableIterator<Uint8Array | string> {
+      yield Buffer.from(raw, 'utf8')
+    },
+  }
+}
+
+interface CapturedResponse {
+  status?: number
+  body?: string
+  writeHead(status: number, headers?: Record<string, string>): unknown
+  end(body?: string): unknown
+}
+
+function fakeResponse(): CapturedResponse {
+  const response: CapturedResponse = {
+    writeHead(status) { response.status = status },
+    end(body) { response.body = body },
+  }
+  return response
+}
+
+async function post(gate: PlanReviewGate, body: unknown, headers?: Record<string, string>): Promise<CapturedResponse> {
+  const res = fakeResponse()
+  await handleReviewRequest(gate, fakeRequest(body, headers), res, [])
+  return res
+}
+
+describe('parseReviewDecisionBody', () => {
+  it('parses session + decision and keeps optional feedback/id', () => {
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"keep","feedback":"f","id":"d1"}'))
+      .toEqual({ value: { session: 's1', decision: 'keep', feedback: 'f', id: 'd1' } })
+  })
+
+  it('rejects malformed JSON, non-objects, and invalid decisions', () => {
+    expect(parseReviewDecisionBody('{').error).toBe('malformed JSON body')
+    expect(parseReviewDecisionBody('7').error).toBe('the body must be a JSON object')
+    expect(parseReviewDecisionBody('{"decision":"approve"}').error).toBe('session is required')
+    expect(parseReviewDecisionBody('{"session":"s1","decision":"maybe"}').error).toBe('decision must be "approve" or "keep"')
+  })
+})
+
+describe('handleReviewRequest', () => {
+  it('settles approve and echoes the settled review', async () => {
+    const gate = new PlanReviewGate()
+    gate.begin('s1', REVIEW)
+    const res = await post(gate, { session: 's1', decision: 'approve', id: 'd1' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body ?? '{}')).toEqual({ ok: true, review: { ...REVIEW, status: 'approved' } })
+  })
+
+  it('forwards keep feedback into the gate', async () => {
+    const gate = new PlanReviewGate()
+    const parked = gate.begin('s1', REVIEW)
+    const res = await post(gate, { session: 's1', decision: 'keep', feedback: 'add tests' })
+    expect(res.status).toBe(200)
+    await expect(parked).rejects.toThrow('their feedback: add tests')
+  })
+
+  it('answers 409 when nothing is pending', async () => {
+    const gate = new PlanReviewGate()
+    const res = await post(gate, { session: 's1', decision: 'approve' })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body ?? '{}').error).toBe('no plan review is pending for this session')
+  })
+
+  it('answers 409 on a stale delivery id (multi-window guard)', async () => {
+    const gate = new PlanReviewGate()
+    gate.begin('s1', REVIEW)
+    const res = await post(gate, { session: 's1', decision: 'approve', id: 'stale' })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body ?? '{}').error).toContain('stale')
+    // The pending review survives the stale click.
+    expect(gate.peek('s1')?.id).toBe('d1')
+  })
+
+  it('answers 400 on a malformed body and 405 on GET', async () => {
+    const gate = new PlanReviewGate()
+    expect((await post(gate, '{')).status).toBe(400)
+    const res = fakeResponse()
+    await handleReviewRequest(gate, { ...fakeRequest({}), method: 'GET' }, res, [])
+    expect(res.status).toBe(405)
+  })
+
+  it('refuses cross-site and off-host requests (the browser trust fence)', async () => {
+    const gate = new PlanReviewGate()
+    gate.begin('s1', REVIEW)
+    const offHost = await post(gate, { session: 's1', decision: 'approve' }, { host: 'evil.example:80' })
+    expect(offHost.status).toBe(403)
+    const crossSite = await post(gate, { session: 's1', decision: 'approve' }, {
+      host: '127.0.0.1:18080',
+      'sec-fetch-site': 'cross-site',
+    })
+    expect(crossSite.status).toBe(403)
+    // The pending review survives both refused clicks.
+    expect(gate.peek('s1')?.id).toBe('d1')
+  })
+
+  it('answers 413 when the body exceeds the cap', async () => {
+    const gate = new PlanReviewGate()
+    gate.begin('s1', REVIEW)
+    const res = fakeResponse()
+    await handleReviewRequest(
+      gate,
+      fakeRequest('x'.repeat(REVIEW_BODY_LIMIT + 1)),
+      res,
+      [],
+    )
+    expect(res.status).toBe(413)
+  })
+})

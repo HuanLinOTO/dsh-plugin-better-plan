@@ -185,8 +185,10 @@ ctx.effect(() => ctx.betterSidebar.registerTab({
 
 ## 11. v1 明确不做
 
-- Plan tab 内 Approve/Refuse 按钮（需 tab→host 双向命令通道；审批留在聊天审批条）
-- tab 内审批状态回显（review 状态在聊天卡片上已可见）
+> 真机走查后第 1、2 条已被推翻并实施（见 §12「审批面迁移」）——保留原文以记录设计演变。
+
+- ~~Plan tab 内 Approve/Refuse 按钮（需 tab→host 双向命令通道；审批留在聊天审批条）~~（已实现：审批门 + `/better-plan/api/review`，见 §12）
+- ~~tab 内审批状态回显（review 状态在聊天卡片上已可见）~~（已实现：`review` WS 帧 + 动作栏状态行）
 - 替换/禁用内置 plan-mode 状态机、`/plan` 命令、徽章（不可达且无必要）
 - 会话日志级 write 纪律核对（D2 已选宽松校验；如需收紧再引入）
 
@@ -208,3 +210,17 @@ ctx.effect(() => ctx.betterSidebar.registerTab({
 首次真机走查失败：模型看到了遮蔽工具（请求工具表已确认是新 `{ path }` 契约）却只写文件不调用。原因不在工具面，而在提示词面——preset 的 `plan:policy` 静态段落教的是原版契约（内联传正文、禁写文件、宣称规则压过工具描述），两份指令冲突时模型放弃交付。§5 的工具 description 对冲不了 preset 段落的显式压过声明。
 
 修复（偏差 5，详见 README）：`system-prompt/assemble` waterfall 监听器逐 agent 注册在 `agent.ctx`，把该段三处原版契约句子锚点替换为文件先行契约。注册必须在 agent scope——`assembleContextFor` 以 agent 为 assemble 派发 key，scope 链准入只向上，插件 fiber 上的注册会被过滤（scope-lifecycle 语义，测试固化）。设计教训：**同名遮蔽要同时覆盖工具 schema 与模型可见提示词两个面**，缺一面即契约自相矛盾。
+
+### 审批面迁移（同日，真机走查反馈）：弹窗抑制 + 侧边栏按钮
+
+走查通过后用户推翻了 §1「审批流不变」与 §11 的两条非目标：聊天里弹出的原版审批卡（`PlanReviewPanel`）不是想要的效果——**送达侧边栏后对话应直接停止，聊天不渲染任何审批卡，审阅与批准全部发生在 Plan 面板内**（按钮是原始计划的诉求）。
+
+实现（偏差 6，详见 README）：
+
+1. **审批门**（`src/review-gate.ts`）：推送 `delivered: true` 时 execute 不再 `userQuestions.ask`，改停靠 `begin()`——工具调用挂起即 agent loop 停止，这正是「直接停止对话」的机制形态。`decide()`（HTTP 路由触发）/ exec.signal abort / `dispose()` 三路结算；错误文案与弹窗路径逐字一致（keep 反馈、重载提示），模型视角的契约不因决定面不同而漂移。
+2. **tab→host 命令通道**（`src/review-route.ts`）：`POST /better-plan/api/review`（§11 当初预判的「双向命令通道」），信任栅栏 + 4KB 体上限 + 陈旧 `id` 守卫（409，防多窗口旧窗口误结算新计划）。
+3. **状态回传**：WS 帧升级为 tagged（`{ kind: 'deliver' … }` / `{ kind: 'review', review }`）；gate 状态变更广播 + attach 回放（含 pending），页面刷新、多窗口、会话切换（store reset + 回放）全部一致。
+4. **动作栏**（PlanView）：pending → 指引 + 反馈输入 + Approve / Keep planning；结算 → 状态行（approved / kept；cancelled 静默）。决策 POST 的 echo 即时更新提交窗口，其余窗口跟 WS 帧。
+5. **降级不变**：`delivered: false`（无侧边栏环境）仍走原版 ask 弹窗（detail=完整计划全文）——**审批能力在无侧边栏环境不丢失**，这是不把 gate 路径「统一化」的硬理由。
+
+设计教训：审批这类「等用户」的交互，宿主端的等待点（工具挂起）与用户面前的操作面（卡片 or 面板）是两个独立决策；同一契约迁移操作面时，错误文案必须逐字共享，否则模型看到两套措辞。

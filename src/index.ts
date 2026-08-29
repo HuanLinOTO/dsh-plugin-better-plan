@@ -13,9 +13,11 @@
  * Delivery pipeline (execute): validate plan mode → resolve the path against
  * the session cwd → stat/read with a byte cap → enqueue a push on the
  * per-session delivery registry (consumed by the `/better-plan/ws/delivery`
- * WebSocket when a sidebar view is attached) → ask the SAME plan-review
- * question the built-in tool asks, with a compact pointer as the detail when
- * the push was delivered and the full plan text otherwise (D3: without the
+ * WebSocket when a sidebar view is attached) → when the push reached a view,
+ * PARK the call on the review gate: the conversation stops with no approval
+ * popup and the user decides in the plan panel (`POST /better-plan/api/review`
+ * settles it); when no view is attached, ask the SAME plan-review question
+ * the built-in tool asks, with the full plan as the detail (D3: without the
  * sidebar the user still reviews the plan on the card).
  *
  * Approval queueing the mode flip: the preset realm's `planMode` service is
@@ -37,7 +39,9 @@ import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import type { Context } from './context.ts'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from './config.ts'
 import { PlanDeliveryRegistry } from './delivery-registry.ts'
+import { PlanReviewGate } from './review-gate.ts'
 import { registerPlanPolicyOverride } from './prompt-override.ts'
+import { registerReviewRoute } from './review-route.ts'
 import { defineExitPlanTool } from './shadow-tool.ts'
 import { registerDeliveryRoute } from './ws-route.ts'
 
@@ -83,10 +87,11 @@ function flushPendingExit(agent: Agent): boolean {
  * `ctx`'s own fiber and cleans up on disposal (HMR-safe).
  * @param ctx - the host plugin context.
  * @param config - the resolved plugin config.
- * @returns the created delivery registry (exposed for tests).
+ * @returns the created delivery registry and review gate (exposed for tests).
  */
-export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDeliveryRegistry {
+export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { registry: PlanDeliveryRegistry; reviewGate: PlanReviewGate } {
   const registry = new PlanDeliveryRegistry()
+  const reviewGate = new PlanReviewGate()
   let disposed = false
 
   // Register the shadowed delivery tool in every agent's scope. The effect
@@ -103,6 +108,7 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDe
         ctx,
         config,
         registry,
+        reviewGate,
         isDisposed: () => disposed,
         onApproved: (session: object) => { pendingExits.add(session as Session) },
       })),
@@ -138,9 +144,21 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDe
     () => registerDeliveryRoute(
       (route) => ctx.webServer.registerUpgrade(route),
       registry,
+      reviewGate,
       ctx.get('webRuntime')?.trustedHosts ?? [],
     ),
     'dsh-plugin-better-plan: delivery WebSocket',
+  )
+
+  // The sidebar review decision route (the tab→host half of the approval
+  // flow; same trust fence as the delivery WebSocket).
+  ctx.effect(
+    () => registerReviewRoute(
+      (route) => ctx.webServer.register(route),
+      reviewGate,
+      ctx.get('webRuntime')?.trustedHosts ?? [],
+    ),
+    'dsh-plugin-better-plan: review API route',
   )
 
   // Align the preset's plan-mode prompt with the file-first tool contract.
@@ -149,9 +167,10 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDe
   ctx.effect(() => () => {
     disposed = true
     registry.dispose()
+    reviewGate.dispose()
   }, 'dsh-plugin-better-plan: service lifetime')
 
-  return registry
+  return { registry, reviewGate }
 }
 
 /**

@@ -23,6 +23,11 @@
  * deferred to the next accepted `agent/pre-step` boundary here — the same
  * mechanism the built-in controller uses (the tool result is the narration).
  *
+ * The preset's static `plan:policy` section still teaches the ORIGINAL
+ * inline-plan contract and bans file writes, so a `system-prompt/assemble`
+ * waterfall listener rewrites those sentences to the file-first contract on
+ * every assembled prompt (see `prompt-override.ts`).
+ *
  * @module @huanlin/dsh-plugin-better-plan
  */
 
@@ -32,6 +37,7 @@ import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import type { Context } from './context.ts'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from './config.ts'
 import { PlanDeliveryRegistry } from './delivery-registry.ts'
+import { registerPlanPolicyOverride } from './prompt-override.ts'
 import { defineExitPlanTool } from './shadow-tool.ts'
 import { registerDeliveryRoute } from './ws-route.ts'
 
@@ -39,9 +45,11 @@ export const name = 'dsh-plugin-better-plan'
 
 /**
  * Services required before mounting: the tool registry (its availability
- * gates scoped registrations) and the webserver (the delivery push route).
+ * gates scoped registrations), the webserver (the delivery push route), and
+ * the system-prompt registry (the assemble waterfall this plugin rewrites
+ * plan-mode guidance through).
  */
-export const inject = ['tools', 'webServer']
+export const inject = ['tools', 'webServer', 'systemPrompt']
 
 /** Loader schema (schemastery, strict) — validated by the cordis Loader. */
 export { Config } from './config.ts'
@@ -100,6 +108,13 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDe
       })),
       'dsh-plugin-better-plan: shadow exit_plan_mode',
     )
+    // The prompt-surface half of the shadow: the agent is the loop's assemble
+    // dispatch key, so the rewrite listener must live on the agent's scope
+    // (scope-chain admission flows events up only).
+    agent.ctx.effect(
+      () => registerPlanPolicyOverride(agent.ctx, config.planDir),
+      'dsh-plugin-better-plan: plan policy prompt override',
+    )
   })
 
   // Flush an approved exit before the next request assembly, so the
@@ -127,6 +142,9 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): PlanDe
     ),
     'dsh-plugin-better-plan: delivery WebSocket',
   )
+
+  // Align the preset's plan-mode prompt with the file-first tool contract.
+  registerPlanPolicyOverride(ctx, config.planDir)
 
   ctx.effect(() => () => {
     disposed = true

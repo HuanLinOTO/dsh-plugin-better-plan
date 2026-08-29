@@ -202,3 +202,9 @@ ctx.effect(() => ctx.betterSidebar.registerTab({
 4. WS 路由补了与 /api 网关同语义的浏览器信任栅栏（webRuntime optional 注入）。
 
 另：幂等守卫用 per-agent WeakSet 而非 catalog 查询——scope 视图会看到 preset 层的内置工具导致永不注册（AGENTS.md「机制锚点」有记录）。
+
+### 真机走查修正（同日）：提示词面覆盖
+
+首次真机走查失败：模型看到了遮蔽工具（请求工具表已确认是新 `{ path }` 契约）却只写文件不调用。原因不在工具面，而在提示词面——preset 的 `plan:policy` 静态段落教的是原版契约（内联传正文、禁写文件、宣称规则压过工具描述），两份指令冲突时模型放弃交付。§5 的工具 description 对冲不了 preset 段落的显式压过声明。
+
+修复（偏差 5，详见 README）：`system-prompt/assemble` waterfall 监听器逐 agent 注册在 `agent.ctx`，把该段三处原版契约句子锚点替换为文件先行契约。注册必须在 agent scope——`assembleContextFor` 以 agent 为 assemble 派发 key，scope 链准入只向上，插件 fiber 上的注册会被过滤（scope-lifecycle 语义，测试固化）。设计教训：**同名遮蔽要同时覆盖工具 schema 与模型可见提示词两个面**，缺一面即契约自相矛盾。

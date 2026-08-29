@@ -33,6 +33,8 @@ export declare const DELIVERY_WS_PATH = "/better-plan/ws/delivery";
  * @param sessionId - the session the socket is subscribed to.
  */
 export declare function applyDeliveryPush(service: BetterSidebarService, payload: unknown, sessionId: string): void;
+/** The betterSidebar service this half resolves through the context proxy. */
+export declare const inject: string[];
 /**
  * Client plugin body.
  * @param ctx - the client cordis context.

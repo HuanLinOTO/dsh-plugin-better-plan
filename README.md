@@ -12,7 +12,8 @@
 
 - **文件先行**：内置 `exit_plan_mode` 的参数是完整计划正文；本插件以**同名工具逐 agent 遮蔽替换**（`agent/session-start` → `agent.ctx.tools.register`，跨 scope 层遮蔽 preset 挂载的原版），新契约只有一个 `path` 参数——模型先用 `write` 工具把完整计划写成 markdown，再传路径。
 - **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。
-- **审批流不变**：仍走 `userQuestions.ask` + `plan-review` 意图（Approve / Keep planning），workspace 树「计划待审」徽章、`/plan` 命令、`plan:policy` 系统提示段、投影全部保持原版。批准后由本插件在下一个 `agent/pre-step` 边界落 `plan/mode: false` 日志事件（与原版控制器的边界 append 同机制）。
+- **审批流不变**：仍走 `userQuestions.ask` + `plan-review` 意图（Approve / Keep planning），workspace 树「计划待审」徽章、`/plan` 命令、投影全部保持原版。批准后由本插件在下一个 `agent/pre-step` 边界落 `plan/mode: false` 日志事件（与原版控制器的边界 append 同机制）。
+- **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段中三处原版契约句子就地改写为文件先行契约；锚点句子只在计划模式激活时出现，无需自管状态。
 - **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，审批卡回退为**完整计划全文**——无侧边栏环境获得原版体验；送达时 detail 是一行指引 + 文件路径。
 - **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件。
 
@@ -118,6 +119,7 @@ pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 2. **presentCall 标题用 basename**：设计写「title = 计划首 heading ?? basename」，但 presentCall 是 args-only 纯函数（C9 回放约束），拿不到文件内容。首 heading 改为在 execute 内计算，用于 WS 推送的 tab 标题；聊天卡片标题 = 文件 basename。
 3. **批准后的模式切换由本插件承载**：preset isolate realm 里的 `planMode` 服务对 agent ctx 不可见，无法直接驱动原版控制器的 `pendingIntents`。本插件以同机制补齐——`plan/mode: false` 延迟到下一个被接受的 `agent/pre-step` 边界 append（WeakSet 记账、append 失败保留重试、工具结果即叙述不额外注入）。语义与原版 execute 完全一致。
 4. **WS 路由加了信任栅栏**：设计未提及；比照 better-sidebar 的路由防护补齐（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname），防 DNS-rebinding 与跨站页面收割推送载荷。
+5. **提示词面覆盖（真机走查发现）**：工具遮蔽生效后首测仍失败——preset 的 `plan:policy` 提示段教的是原版契约（「call exit_plan_mode with the complete plan markdown」+「Do not edit or write files」+「规则压过工具描述」），模型被两份矛盾指令夹住后写完文件直接收尾，从未调用交付工具。修复：`system-prompt/assemble` waterfall 监听器把该段三处句子就地改写为文件先行契约（`rewritePlanPolicySection` 锚点替换、幂等、缺锚跳过以兼容 preset 变体）。监听器必须逐 agent 注册在 `agent.ctx` 上——`assembleContextFor` 以 agent 为派发 key，scope 链准入只向上流，插件 fiber 上的全局注册会被过滤（测试固化了这一约束）。
 
 ## License
 

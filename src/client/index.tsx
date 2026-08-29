@@ -63,6 +63,9 @@ export function applyDeliveryPush(service: BetterSidebarService, payload: unknow
   }
 }
 
+/** The betterSidebar service this half resolves through the context proxy. */
+export const inject = ['betterSidebar']
+
 /**
  * Client plugin body.
  * @param ctx - the client cordis context.

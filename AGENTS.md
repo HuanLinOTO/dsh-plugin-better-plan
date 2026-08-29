@@ -41,7 +41,7 @@ foreach ($k in $links.Keys) {
 
 ```sh
 pnpm run typecheck    # tsc --noEmit ×2（tsconfig.json host+tests 面、tsconfig.client.json 纯 client 面）
-pnpm test             # vitest run（10 个 spec 文件）
+pnpm test             # vitest run（11 个 spec 文件）
 pnpm run build        # tsdown（host ESM + client CJS closure）+ tsc -p tsconfig.build.json → lib/
 pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 ```
@@ -49,6 +49,7 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 ## 机制锚点（改动前先读）
 
 - **同名遮蔽**：`agent/session-start` → `agent.ctx.effect(() => agent.ctx.tools.register(...))`。agent scope 层遮蔽 preset standing scope 层的内置注册；effect 绑 agent fiber，agent 释放即清理。幂等守卫用 per-agent `WeakSet`（不要用 `tools.get(name)` 判断——全局视图看不到 preset 层的内置工具，而带 scope 的视图会看到它导致永远跳过注册）。
+- **提示词面覆盖**：preset 的 `plan:policy` 段落教原版内联契约且禁写文件，与工具契约冲突 → `registerPlanPolicyOverride` 把 `system-prompt/assemble` waterfall 监听器**逐 agent 注册在 `agent.ctx`**。assemble 派发 key = agent 本身（`assembleContextFor` 返回 `{ agent, scope: agent }`），scope 链准入只向上流——挂在插件 fiber 上的注册会被过滤，**不要「简化」成全局注册**（有测试固化该约束）。改写是锚点句子替换（幂等、缺锚跳过，兼容 preset 变体）；锚点出现 ⇔ 计划模式激活，无需自管状态。
 - **模式切换**：preset isolate realm 的 `planMode` 服务对 agent ctx 不可见，不能调原版控制器。批准后 `pendingExits`（WeakSet<Session>）记账，下一个被接受的 `agent/pre-step` 边界 append `plan/mode: { active: false }`；append 失败保留记账（logger.warn），下个边界重试；与原版 onBoundary 的 delete-after-success 语义一致。
 - **client 半纯度门**：client bundle 禁止 value-import 其他插件/宿主内部模块。better-sidebar 的交互全部走 `ctx.betterSidebar` 方法；`markdownTextProps` 双形状逻辑内联在 `src/client/markdown-props.ts`（勿改成 import）。
 - **updateTab 序列**：`single: true` 的 dedupe 聚焦不覆写已开 tab 的 path，重复交付必须紧跟 `updateTab`（`features.includes('updateTab')` gate）+ `activateTab`。`meta.path` 随 tab 持久化，刷新后 PlanView 按 `meta.path` 重读。
@@ -59,8 +60,9 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 
 | 文件 | 职责 |
 |------|------|
-| `src/index.ts` | host 入口：遮蔽挂接、pre-step flush、WS 路由注册、service lifetime |
+| `src/index.ts` | host 入口：遮蔽挂接（工具 + 提示词面）、pre-step flush、WS 路由注册、service lifetime |
 | `src/shadow-tool.ts` | 工具契约全部面：description / parameters / output schema+render / execute / presentCall / presentResult |
+| `src/prompt-override.ts` | `plan:policy` 段落锚点改写（`rewritePlanPolicySection`）+ assemble waterfall 注册（`registerPlanPolicyOverride`） |
 | `src/delivery-registry.ts` | per-session 推送队列（上限 8、consume-on-send、attach 回放） |
 | `src/ws-route.ts` | `/better-plan/ws/delivery` 升级注册 + `attachDeliverySocket` |
 | `src/trust-fence.ts` | 浏览器信任栅栏（对齐 /api 网关语义） |

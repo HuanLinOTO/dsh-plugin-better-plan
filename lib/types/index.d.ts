@@ -23,6 +23,11 @@
  * deferred to the next accepted `agent/pre-step` boundary here — the same
  * mechanism the built-in controller uses (the tool result is the narration).
  *
+ * The preset's static `plan:policy` section still teaches the ORIGINAL
+ * inline-plan contract and bans file writes, so a `system-prompt/assemble`
+ * waterfall listener rewrites those sentences to the file-first contract on
+ * every assembled prompt (see `prompt-override.ts`).
+ *
  * @module @huanlin/dsh-plugin-better-plan
  */
 import type { Context } from './context.ts';
@@ -31,7 +36,9 @@ import { PlanDeliveryRegistry } from './delivery-registry.ts';
 export declare const name = "dsh-plugin-better-plan";
 /**
  * Services required before mounting: the tool registry (its availability
- * gates scoped registrations) and the webserver (the delivery push route).
+ * gates scoped registrations), the webserver (the delivery push route), and
+ * the system-prompt registry (the assemble waterfall this plugin rewrites
+ * plan-mode guidance through).
  */
 export declare const inject: string[];
 /** Loader schema (schemastery, strict) — validated by the cordis Loader. */

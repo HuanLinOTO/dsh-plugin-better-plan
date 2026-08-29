@@ -16,6 +16,7 @@ import UserQuestionService, { UserQuestionError } from '@deepseek-ai/dsh-user-qu
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
 import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
 import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
+import { PLAN_DELIVERY_ANCHOR } from '../src/prompt-override.ts'
 import * as betterPlan from '../src/index.ts'
 import { DELIVERY_WS_PATH } from '../src/ws-route.ts'
 
@@ -160,6 +161,22 @@ describe('shadow registration', () => {
     const agent = await agentWithSession(harness, 'no-section', { active: true })
     const assembly = await harness.ctx.systemPrompt.assemble({ agent, scope: agent })
     expect(assembly.sections.find(section => section.name.startsWith('better-plan'))).toBeUndefined()
+  })
+
+  it('rewrites the preset plan policy text on the agent scope via the session-start wiring', async () => {
+    // The listener must live on the agent's scope: the loop assembles with the
+    // agent as the dispatch key, and scope admission flows up the chain only.
+    const harness = await setup()
+    const agent = await agentWithSession(harness, 'prompt-override', { active: true })
+    harness.ctx.systemPrompt.section({
+      name: 'plan:policy',
+      order: 100,
+      text: 'When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make it the only and final tool call.',
+    })
+    const assembly = await harness.ctx.systemPrompt.assemble({ agent, scope: agent })
+    const section = assembly.sections.find(candidate => candidate.name === 'plan:policy')
+    expect(section?.text).not.toContain(PLAN_DELIVERY_ANCHOR)
+    expect(section?.text).toContain('call exit_plan_mode with the path of the plan file you wrote')
   })
 })
 

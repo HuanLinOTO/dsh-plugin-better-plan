@@ -10,6 +10,7 @@ import {
 } from '../src/review-route.ts'
 
 const REVIEW = { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }
+const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {} }
 
 /** A fake request: method/headers plus a one-chunk async body iterator. */
 function fakeRequest(body: unknown, headers: Record<string, string> = { host: '127.0.0.1:18080' }): ReviewHttpRequest {
@@ -45,6 +46,12 @@ async function post(gate: PlanReviewGate, body: unknown, headers?: Record<string
   return res
 }
 
+async function get(gate: PlanReviewGate, url: string, headers: Record<string, string> = { host: '127.0.0.1:18080' }): Promise<CapturedResponse> {
+  const res = fakeResponse()
+  await handleReviewRequest(gate, { ...fakeRequest({}), method: 'GET', url, headers }, res, [])
+  return res
+}
+
 describe('parseReviewDecisionBody', () => {
   it('parses session + decision and keeps optional feedback/id', () => {
     expect(parseReviewDecisionBody('{"session":"s1","decision":"keep","feedback":"f","id":"d1"}'))
@@ -62,7 +69,7 @@ describe('parseReviewDecisionBody', () => {
 describe('handleReviewRequest', () => {
   it('settles approve and echoes the settled review', async () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, NO_HANDLERS)
     const res = await post(gate, { session: 's1', decision: 'approve', id: 'd1' })
     expect(res.status).toBe(200)
     expect(JSON.parse(res.body ?? '{}')).toEqual({ ok: true, review: { ...REVIEW, status: 'approved' } })
@@ -70,10 +77,11 @@ describe('handleReviewRequest', () => {
 
   it('forwards keep feedback into the gate', async () => {
     const gate = new PlanReviewGate()
-    const parked = gate.begin('s1', REVIEW)
+    const keeps: Array<string | undefined> = []
+    gate.begin('s1', REVIEW, { onApprove: () => {}, onKeep: (feedback) => { keeps.push(feedback) } })
     const res = await post(gate, { session: 's1', decision: 'keep', feedback: 'add tests' })
     expect(res.status).toBe(200)
-    await expect(parked).rejects.toThrow('their feedback: add tests')
+    expect(keeps).toEqual(['add tests'])
   })
 
   it('answers 409 when nothing is pending', async () => {
@@ -85,7 +93,7 @@ describe('handleReviewRequest', () => {
 
   it('answers 409 on a stale delivery id (multi-window guard)', async () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, NO_HANDLERS)
     const res = await post(gate, { session: 's1', decision: 'approve', id: 'stale' })
     expect(res.status).toBe(409)
     expect(JSON.parse(res.body ?? '{}').error).toContain('stale')
@@ -93,17 +101,32 @@ describe('handleReviewRequest', () => {
     expect(gate.peek('s1')?.id).toBe('d1')
   })
 
-  it('answers 400 on a malformed body and 405 on GET', async () => {
+  it('answers 400 on a malformed body and 405 on other methods', async () => {
     const gate = new PlanReviewGate()
     expect((await post(gate, '{')).status).toBe(400)
     const res = fakeResponse()
-    await handleReviewRequest(gate, { ...fakeRequest({}), method: 'GET' }, res, [])
+    await handleReviewRequest(gate, { ...fakeRequest({}), method: 'PUT' }, res, [])
     expect(res.status).toBe(405)
+  })
+
+  it('GET bootstraps the current review state for the plan panel', async () => {
+    const gate = new PlanReviewGate()
+    const missing = await get(gate, `${REVIEW_API_PATH}?session=s1`)
+    expect(missing.status).toBe(200)
+    expect(JSON.parse(missing.body ?? '{}')).toEqual({ ok: true, review: null })
+    gate.begin('s1', REVIEW, NO_HANDLERS)
+    const res = await get(gate, `${REVIEW_API_PATH}?session=s1`)
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body ?? '{}')).toEqual({ ok: true, review: { ...REVIEW, status: 'pending' } })
+    const noSession = await get(gate, REVIEW_API_PATH)
+    expect(noSession.status).toBe(400)
+    // GET never settles the pending review.
+    expect(gate.peek('s1')?.id).toBe('d1')
   })
 
   it('refuses cross-site and off-host requests (the browser trust fence)', async () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, NO_HANDLERS)
     const offHost = await post(gate, { session: 's1', decision: 'approve' }, { host: 'evil.example:80' })
     expect(offHost.status).toBe(403)
     const crossSite = await post(gate, { session: 's1', decision: 'approve' }, {
@@ -117,7 +140,7 @@ describe('handleReviewRequest', () => {
 
   it('answers 413 when the body exceeds the cap', async () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, NO_HANDLERS)
     const res = fakeResponse()
     await handleReviewRequest(
       gate,

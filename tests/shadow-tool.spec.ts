@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from '../src/config.ts'
 import { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
 import { PlanReviewGate } from '../src/review-gate.ts'
-import { APPROVE_LABEL, KEEP_PLANNING_LABEL, REVIEW_ID, defineExitPlanTool, exitPlanDescription, reviewDetail } from '../src/shadow-tool.ts'
+import { APPROVAL_STEER_TEXT, APPROVE_LABEL, KEEP_PLANNING_LABEL, REVIEW_ID, defineExitPlanTool, exitPlanDescription, keepPlanningSteerText, reviewDetail } from '../src/shadow-tool.ts'
 
 const CONFIG: BetterPlanConfig = resolveBetterPlanConfig({})
 
@@ -19,13 +19,15 @@ function stubTool(): ReturnType<typeof defineExitPlanTool> {
 }
 
 describe('exitPlanDescription', () => {
-  it('carries the file-first contract and the configured planDir suggestion', () => {
+  it('carries the file-first, immediate-return end-turn contract', () => {
     const description = exitPlanDescription(resolveBetterPlanConfig({ planDir: 'docs/plans' }))
     expect(description).toMatch(/^Use only in plan mode\./)
     expect(description).toContain('write tool')
     expect(description).toContain('`docs/plans/YYYY-MM-DD-<topic>.md`')
     expect(description).toContain('sidebar plan panel')
-    expect(description).toContain('revise the file and present again')
+    expect(description).toContain('returns immediately')
+    expect(description).toContain('end your turn right after it and wait')
+    expect(description).toContain('revise the file and present it again')
   })
 })
 
@@ -52,7 +54,7 @@ describe('the shadow tool definition (pure projections)', () => {
       card: 'generic',
       title: '2026-08-29-topic.md',
       kind: 'other',
-      content: [{ type: 'text', text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning there.' }],
+      content: [{ type: 'text', text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; the conversation waits for the user\'s decision there.' }],
     })
     // The card never carries the plan body (compact by design).
     expect(JSON.stringify(view)).not.toContain('# The plan')
@@ -68,11 +70,14 @@ describe('the shadow tool definition (pure projections)', () => {
     })
   })
 
-  it('renders the model-facing confirmation with the delivered branch', () => {
+  it('renders the pending branch as the end-of-turn contract and the approved branch for the popup path', () => {
     const tool = stubTool()
-    expect(tool.output.render({ path: '/p.md' }, { approved: true, delivered: true }))
-      .toEqual([{ type: 'text', text: 'Plan approved — plan mode exited; carry out the plan starting with your next step. The plan is open in the sidebar plan panel.' }])
-    expect(tool.output.render({ path: '/p.md' }, { approved: true, delivered: false }))
+    const pending = tool.output.render({ path: '/p.md' }, { delivered: true, decision: 'pending' })
+    expect(pending).toHaveLength(1)
+    expect(pending[0]?.type === 'text' && pending[0].text).toContain('End your turn now')
+    expect(pending[0]?.type === 'text' && pending[0].text).toContain('sidebar plan panel')
+    expect(pending[0]?.type === 'text' && pending[0].text).toContain('do not call any more tools')
+    expect(tool.output.render({ path: '/p.md' }, { delivered: false, decision: 'approved' }))
       .toEqual([{ type: 'text', text: 'Plan approved — plan mode exited; carry out the plan starting with your next step. (No sidebar plan panel is connected; the plan file is at /p.md.)' }])
   })
 
@@ -80,5 +85,13 @@ describe('the shadow tool definition (pure projections)', () => {
     expect(REVIEW_ID).toBe('plan-review')
     expect(APPROVE_LABEL).toBe('Approve')
     expect(KEEP_PLANNING_LABEL).toBe('Keep planning')
+  })
+
+  it('builds the steer messages the sidebar decisions fire', () => {
+    expect(APPROVAL_STEER_TEXT).toContain('approved the plan in the sidebar plan panel')
+    expect(APPROVAL_STEER_TEXT).toContain('Plan mode is now off')
+    expect(keepPlanningSteerText(undefined)).toContain('chose to keep planning')
+    expect(keepPlanningSteerText(undefined)).not.toContain('Their feedback')
+    expect(keepPlanningSteerText('add tests')).toContain('Their feedback: add tests.')
   })
 })

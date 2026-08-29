@@ -22,7 +22,7 @@ import type { ComponentProps } from 'react'
 import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { TabComponentProps } from 'dsh-better-sidebar/client/service'
 import { markdownTextProps } from './markdown-props.ts'
-import { reviewStore, submitReviewDecision } from './review-store.ts'
+import { fetchReviewState, reviewStore, submitReviewDecision } from './review-store.ts'
 
 /** The meta payload the delivery flow stores on the tab. */
 interface PlanTabMeta {
@@ -151,6 +151,12 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
     setFeedback('')
     setSubmitError(undefined)
   }, [review?.id])
+
+  // HTTP bootstrap of the review state (covers a missed WS review frame);
+  // the store keeps whatever a live frame already delivered.
+  useEffect(() => {
+    void fetchReviewState(scope.sessionId)
+  }, [scope.sessionId])
 
   useEffect(() => {
     if (path === undefined) {

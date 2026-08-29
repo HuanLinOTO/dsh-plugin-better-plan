@@ -74,6 +74,27 @@ export type ReviewDecisionOutcome =
   | { ok: false; error: string }
 
 /**
+ * Bootstrap the review state over HTTP (the WS attach replay remains the
+ * live channel): fills the bar when a review frame was missed (stale bundle,
+ * reconnect gap). A live frame already in the store wins — the GET result is
+ * only applied while the store is empty, so a late null response can never
+ * clear a pending bar.
+ * @param sessionId - the session whose review state to read.
+ */
+export async function fetchReviewState(sessionId: string): Promise<void> {
+  try {
+    const response = await fetch(`${REVIEW_API_PATH}?session=${encodeURIComponent(sessionId)}`)
+    const parsed: { ok?: unknown; review?: unknown } | null = await response.json().catch(() => null)
+    if (!response.ok || parsed === null || parsed.ok !== true) return
+    if (reviewStore.get() !== null) return
+    if (parsed.review === null) reviewStore.set(null)
+    else if (isReviewState(parsed.review)) reviewStore.set(parsed.review)
+  } catch {
+    // Bootstrap only: the WS remains the authoritative live channel.
+  }
+}
+
+/**
  * Post one review decision to the host route and, on success, echo the
  * settled state into the store (the submitting view updates immediately;
  * other views follow over the WebSocket).

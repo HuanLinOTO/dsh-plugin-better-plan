@@ -12,9 +12,10 @@
 
 - **文件先行**：内置 `exit_plan_mode` 的参数是完整计划正文；本插件以**同名工具逐 agent 遮蔽替换**（`agent/session-start` → `agent.ctx.tools.register`，跨 scope 层遮蔽 preset 挂载的原版），新契约只有一个 `path` 参数——模型先用 `write` 工具把完整计划写成 markdown，再传路径。
 - **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。
-- **侧边栏审批（送达时无聊天弹窗）**：推送送达已连接的侧边栏视图后，工具调用**停在审批门上**——对话就此暂停，聊天流里不渲染任何审批卡；用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端结算审批门。审批语义与模式切换语义与原版完全一致（批准 → `{ approved: true }` + 下一个 pre-step 边界落 `plan/mode: false`；保留计划 → 带反馈的纠错错误回到模型）。审批状态经 WS 帧广播，页面刷新后 attach 回放恢复动作栏。
+- **侧边栏审批（送达时无聊天弹窗、对话直接停止）**：推送送达已连接的侧边栏视图后，工具**立即返回**「计划已呈现，请结束回合」——模型收尾结束对话，聊天里既没有审批卡也没有挂起的调用卡片。用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端：批准 → 立即落 `plan/mode: false` 并以 `agent.steer` 开启新回合让模型开始执行；保留 → 反馈经 steer 开新回合回给模型修改。审批语义与模式切换语义与原版一致。
 - **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段中三处原版契约句子就地改写为文件先行契约；锚点句子只在计划模式激活时出现，无需自管状态。
-- **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染，detail 是完整计划全文。
+- **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版阻塞审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染（detail 是完整计划全文），批准后原样在回合内继续。
+- **审批状态双通道**：WS `review` 帧实时广播（多窗口同步、attach 回放恢复刷新）；Plan 面板挂载时再经 `GET /better-plan/api/review` 引导拉取一次（防丢帧；store 已有活动状态时让位，不会误清）。
 - **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件。
 
 ## 开发
@@ -97,7 +98,7 @@ dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 
 ```sh
 pnpm run typecheck   # 类型门禁（host + client 两个 tsc 面）
-pnpm test            # 105 个单元/组合/组件测试
+pnpm test            # 106 个单元/组合/组件测试
 pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 ```
 
@@ -124,7 +125,7 @@ pnpm run build       # 产物: lib/index.js, lib/client.js (+ lib/types/*.d.ts)
 3. **批准后的模式切换由本插件承载**：preset isolate realm 里的 `planMode` 服务对 agent ctx 不可见，无法直接驱动原版控制器的 `pendingIntents`。本插件以同机制补齐——`plan/mode: false` 延迟到下一个被接受的 `agent/pre-step` 边界 append（WeakSet 记账、append 失败保留重试、工具结果即叙述不额外注入）。语义与原版 execute 完全一致。
 4. **WS 路由加了信任栅栏**：设计未提及；比照 better-sidebar 的路由防护补齐（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname），防 DNS-rebinding 与跨站页面收割推送载荷。
 5. **提示词面覆盖（真机走查发现）**：工具遮蔽生效后首测仍失败——preset 的 `plan:policy` 提示段教的是原版契约（「call exit_plan_mode with the complete plan markdown」+「Do not edit or write files」+「规则压过工具描述」），模型被两份矛盾指令夹住后写完文件直接收尾，从未调用交付工具。修复：`system-prompt/assemble` waterfall 监听器把该段三处句子就地改写为文件先行契约（`rewritePlanPolicySection` 锚点替换、幂等、缺锚跳过以兼容 preset 变体）。监听器必须逐 agent 注册在 `agent.ctx` 上——`assembleContextFor` 以 agent 为派发 key，scope 链准入只向上流，插件 fiber 上的全局注册会被过滤（测试固化了这一约束）。
-6. **审批面从聊天卡迁到侧边栏（真机走查反馈）**：设计 §1/§11 曾把「Plan tab 内 Approve/Refuse 按钮」列为 v1 非目标（审批留在聊天审批条）。真机走查后按用户要求推翻：推送**送达已连接视图**时，工具调用停靠在 `review-gate` 上（对话直接暂停，聊天不渲染审批卡），用户在 Plan 面板动作栏点 Approve / Keep planning（可附反馈），决定经 `POST /better-plan/api/review` 结算；WS 广播 `review` 帧保持多窗口/刷新后状态一致（attach 回放）。**未送达时仍回退原版审批卡（detail=完整计划全文）**，无侧边栏环境的审批能力不丢失。错误文案与原版弹窗逐字一致，模型看到的纠错指引与决定面无关。
+6. **审批面从聊天卡迁到侧边栏 + 交付不再阻塞（真机走查反馈）**：设计 §1/§11 曾把「Plan tab 内 Approve/Refuse 按钮」列为 v1 非目标（审批留在聊天审批条）。真机走查后按用户要求推翻并迭代两步：(a) 首版把工具调用停靠在审批门上等决定——被走查否决：聊天里留下一个永远「运行中」的卡片，观感即卡死，且用户此刻输入无处落地。(b) 终版：**送达后工具立即返回** `decision: 'pending'`，render 指示模型结束回合（对话自然停止）；用户在 Plan 面板动作栏决定后，宿主端**立即落 `plan/mode: false`（回合间 append，与原版控制器空闲时行为一致；失败退回 pendingExits 边界重试）并 `agent.steer` 开启新回合**把批准/反馈告诉模型（`steer` 契约：空闲 driver 直接开回合）。未送达时仍回退原版阻塞弹窗（detail=完整计划全文）。关键机制事实：阻塞工具 ≠ 停止对话——停止对话的唯一自然形态是模型停止调用工具，工具结果文本就是那个指令。
 
 ## License
 

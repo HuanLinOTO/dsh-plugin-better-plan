@@ -211,16 +211,15 @@ ctx.effect(() => ctx.betterSidebar.registerTab({
 
 修复（偏差 5，详见 README）：`system-prompt/assemble` waterfall 监听器逐 agent 注册在 `agent.ctx`，把该段三处原版契约句子锚点替换为文件先行契约。注册必须在 agent scope——`assembleContextFor` 以 agent 为 assemble 派发 key，scope 链准入只向上，插件 fiber 上的注册会被过滤（scope-lifecycle 语义，测试固化）。设计教训：**同名遮蔽要同时覆盖工具 schema 与模型可见提示词两个面**，缺一面即契约自相矛盾。
 
-### 审批面迁移（同日，真机走查反馈）：弹窗抑制 + 侧边栏按钮
+### 审批面迁移（同日，真机走查反馈）：弹窗抑制 + 侧边栏按钮 + 交付不阻塞
 
 走查通过后用户推翻了 §1「审批流不变」与 §11 的两条非目标：聊天里弹出的原版审批卡（`PlanReviewPanel`）不是想要的效果——**送达侧边栏后对话应直接停止，聊天不渲染任何审批卡，审阅与批准全部发生在 Plan 面板内**（按钮是原始计划的诉求）。
 
-实现（偏差 6，详见 README）：
+实现迭代了两步，第一步被走查否决，记录教训：
 
-1. **审批门**（`src/review-gate.ts`）：推送 `delivered: true` 时 execute 不再 `userQuestions.ask`，改停靠 `begin()`——工具调用挂起即 agent loop 停止，这正是「直接停止对话」的机制形态。`decide()`（HTTP 路由触发）/ exec.signal abort / `dispose()` 三路结算；错误文案与弹窗路径逐字一致（keep 反馈、重载提示），模型视角的契约不因决定面不同而漂移。
-2. **tab→host 命令通道**（`src/review-route.ts`）：`POST /better-plan/api/review`（§11 当初预判的「双向命令通道」），信任栅栏 + 4KB 体上限 + 陈旧 `id` 守卫（409，防多窗口旧窗口误结算新计划）。
-3. **状态回传**：WS 帧升级为 tagged（`{ kind: 'deliver' … }` / `{ kind: 'review', review }`）；gate 状态变更广播 + attach 回放（含 pending），页面刷新、多窗口、会话切换（store reset + 回放）全部一致。
-4. **动作栏**（PlanView）：pending → 指引 + 反馈输入 + Approve / Keep planning；结算 → 状态行（approved / kept；cancelled 静默）。决策 POST 的 echo 即时更新提交窗口，其余窗口跟 WS 帧。
-5. **降级不变**：`delivered: false`（无侧边栏环境）仍走原版 ask 弹窗（detail=完整计划全文）——**审批能力在无侧边栏环境不丢失**，这是不把 gate 路径「统一化」的硬理由。
+1. **首版（已废弃）：停靠审批门**。推送 `delivered: true` 时工具停在 gate 上等决定——机制上「对话停了」，但聊天里留下一张永远「运行中」的工具卡片，观感即卡死，且用户此刻的输入无处落地。真机反馈：这不对，要么真停，要么返回「计划已呈现，请结束对话」。
+2. **终版：立即返回 + steer 回传**。关键机制认知：**阻塞工具 ≠ 停止对话**——对话停止的唯一自然形态是模型停止调用工具。送达后工具立即返回 `decision: 'pending'`，render 文本指示模型「计划已呈现，结束回合等待审阅」，回合自然结束。用户在动作栏决定后，`decide()` 触发 handlers：批准 → 直接 append `plan/mode: { active: false }`（回合间 append，与原版控制器空闲时行为一致；失败退回 pendingExits 边界重试）+ `agent.steer` 开新回合（`steer` 契约：**空闲 driver 直接开新回合**，运行中则最近 step 注入）；保留 → steer 带回反馈。回合重新运转，批准后模型自动开始执行。
 
-设计教训：审批这类「等用户」的交互，宿主端的等待点（工具挂起）与用户面前的操作面（卡片 or 面板）是两个独立决策；同一契约迁移操作面时，错误文案必须逐字共享，否则模型看到两套措辞。
+配套面：`POST /better-plan/api/review`（GET 引导当前状态 + POST 结算决定，信任栅栏 + 4KB 体上限 + 陈旧 `id` 守卫）；WS 帧升级 tagged（`deliver`/`review`）+ attach 回放 + PlanView 挂载时 GET 引导（防丢帧，store 已有活动状态时让位）；动作栏 pending → 按钮、结算 → 状态行。降级不变：`delivered: false` 仍走原版阻塞弹窗（detail=完整计划全文）——无侧边栏环境的审批能力不丢失，这是不把 gate 路径「统一化」的硬理由。
+
+设计教训：① 审批这类「等用户」的交互，宿主端的等待点与用户面前的操作面是两个独立决策，且**等待点不该落在工具执行里**——工具挂起的可见形态（运行中卡片）与「对话已停」的用户预期直接冲突；② 让对话停下的正道是让模型停下（结果文本即指令），不是让循环挂起；③ 决定回传的机制是 `steer` 的空闲开回合契约——它在运行中注入、空闲开回合的双语义恰好覆盖批准时刻的所有并发形态。

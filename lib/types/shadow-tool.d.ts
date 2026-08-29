@@ -12,19 +12,15 @@
  *
  * What changes is the delivery: the model must write the COMPLETE plan to a
  * markdown file first (guided by this description — D2 verifies only that the
- * file exists and is readable), then pass its path. The tool reads the file
- * and pushes it to the session's sidebar plan panel through the delivery
- * registry. When the push reached a connected sidebar view the tool call
- * PARKS on the review gate — the conversation stops with no approval popup,
- * and the user reviews the plan and decides in the sidebar plan panel. When
- * no view is attached the built-in plan-review question renders in chat with
- * the full plan text (no-sidebar environment ⇒ the original experience).
- *
- * Approval keeps the built-in approval semantics AND the built-in mode
- * switch: the preset realm's `planMode` service is invisible to this plugin,
- * so the `plan/mode: false` append is deferred to the next accepted
- * `agent/pre-step` boundary here (the same mechanism the built-in controller
- * uses; the tool result is the narration, so nothing extra is injected).
+ * file exists and is readable), then pass its path. When the push reaches a
+ * connected sidebar view, the tool RETURNS IMMEDIATELY with `decision:
+ * 'pending'` — the render instructs the model to end its turn, so the
+ * conversation simply stops with no approval popup — and the user reviews the
+ * plan and decides in the sidebar plan panel. The decision is steered back as
+ * the next turn's message (approval also flips plan mode off, see the review
+ * handlers below). When no view is attached, the built-in plan-review
+ * question renders in chat with the full plan text and blocks exactly like
+ * the original tool (no-sidebar environment ⇒ the original experience).
  *
  * Conventions (per plugin-development-guide.md §3):
  *   C4 — `execute` returns one canonical JSON value; `render` is separate.
@@ -45,16 +41,35 @@ export declare const APPROVE_LABEL = "Approve";
 /** The review question's keep-planning option label (the built-in wording). */
 export declare const KEEP_PLANNING_LABEL = "Keep planning";
 /**
+ * The canonical tool value: `pending` = the plan reached the sidebar and the
+ * decision comes later (the model must end its turn); `approved` = the
+ * no-sidebar popup path answered in-turn. `delivered` distinguishes the
+ * push outcome for the render's context note.
+ */
+export interface ExitPlanValue {
+    delivered: boolean;
+    decision: 'pending' | 'approved';
+}
+/** The steer message fired when the sidebar approval lands. */
+export declare const APPROVAL_STEER_TEXT = "[Plan review] The user approved the plan in the sidebar plan panel. Plan mode is now off \u2014 carry out the plan starting with this step.";
+/**
+ * The steer message fired when the sidebar keeps planning.
+ * @param feedback - the user's optional feedback (already trimmed).
+ * @returns the steer text.
+ */
+export declare function keepPlanningSteerText(feedback: string | undefined): string;
+/**
  * The model-facing description. The model's only new knowledge: the
- * file-first contract, the sidebar plan panel, and the unchanged review flow.
- * `planDir` is interpolated into the example path.
+ * file-first contract, the immediate-return + end-turn contract, and the
+ * decision arriving as the next message. `planDir` is interpolated into the
+ * example path.
  * @param config - the plugin config (planDir suggestion).
  * @returns the description string.
  */
 export declare function exitPlanDescription(config: BetterPlanConfig): string;
 /**
  * The review question's detail: the full plan text. Only the no-sidebar
- * fallback reaches the question (a delivered plan parks on the review gate
+ * fallback reaches the question (a delivered plan is reviewed in the sidebar
  * instead), so the user always sees the whole plan on the popup card.
  * @param plan - the full plan markdown.
  * @returns the detail string for the plan-review question.
@@ -68,7 +83,7 @@ export interface ShadowToolDeps {
     config: BetterPlanConfig;
     /** The delivery registry (per-session queue + views). */
     registry: PlanDeliveryRegistry;
-    /** The sidebar review gate (parks a delivered call until the user decides). */
+    /** The sidebar review gate (records the pending decision + handlers). */
     reviewGate: PlanReviewGate;
     /** Whether the plugin fiber was disposed while a review may be pending. */
     isDisposed: () => boolean;

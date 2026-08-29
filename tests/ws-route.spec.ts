@@ -3,6 +3,8 @@ import { PlanDeliveryRegistry } from '../src/delivery-registry.ts'
 import { PlanReviewGate } from '../src/review-gate.ts'
 import { DELIVERY_WS_PATH, attachDeliverySocket, type DeliverySocket } from '../src/ws-route.ts'
 
+const NO_HANDLERS = { onApprove: () => {}, onKeep: () => {} }
+
 /** A minimal fake socket capturing sends and lifecycle callbacks. */
 function fakeSocket(): DeliverySocket & { sent: string[]; closeCalls: Array<[number?, string?]>; emitClose(): void } {
   const sent: string[] = []
@@ -43,7 +45,7 @@ describe('attachDeliverySocket', () => {
     const registry = new PlanDeliveryRegistry()
     const gate = new PlanReviewGate()
     registry.enqueue('s1', '/p1.md', 'One')
-    gate.begin('s1', { id: 'd1', path: '/p1.md', title: 'One' })
+    gate.begin('s1', { id: 'd1', path: '/p1.md', title: 'One' }, NO_HANDLERS)
     const ws = fakeSocket()
     attachDeliverySocket(registry, gate, ws, { url: `${DELIVERY_WS_PATH}?session=s1`, headers: {} })
     const frames = ws.sent.map(frame => JSON.parse(frame))
@@ -77,7 +79,7 @@ describe('attachDeliverySocket', () => {
     // dead socket (the review parks invisibly, like the delivery would queue).
     ws.emitClose()
     const before = ws.sent.length
-    gate.begin('s1', { id: 'd1', path: '/p.md', title: 'T' })
+    gate.begin('s1', { id: 'd1', path: '/p.md', title: 'T' }, NO_HANDLERS)
     expect(ws.sent.length).toBe(before)
   })
 })

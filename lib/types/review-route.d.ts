@@ -57,8 +57,10 @@ export declare function parseReviewDecisionBody(raw: string): {
     error: string;
 };
 /**
- * Serve one review decision request.
- * @param gate - the review gate holding the parked review.
+ * Serve one review request: GET bootstraps the plan panel's action bar with
+ * the current state (the WS attach replay remains the live channel); POST
+ * settles the pending decision.
+ * @param gate - the review gate holding the pending review.
  * @param req - the request (method/headers/body iterator).
  * @param res - the response.
  * @param trustedHosts - non-loopback authorities the deployment serves.

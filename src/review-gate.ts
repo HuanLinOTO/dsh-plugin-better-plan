@@ -1,21 +1,19 @@
 /**
- * The plan-review gate: the per-session parking spot for a delivered plan
- * that awaits the user's decision IN THE SIDEBAR (no chat popup).
+ * The plan-review gate: the per-session record of a delivered plan that
+ * awaits the user's decision IN THE SIDEBAR (no chat popup).
  *
- * The shadowed `exit_plan_mode` parks its tool call here when the delivery
- * push reached a connected sidebar view (`delivered: true`). Parking blocks
- * the agent loop — the conversation simply stops until the user decides in
- * the plan panel, which is the point: review happens in the sidebar, the
- * approval card never renders in chat. The gate settles through
- * `decide()` (the review HTTP route), through the tool call's abort signal
- * (the user stopped the turn), or through `dispose()` (plugin reload).
+ * The shadowed `exit_plan_mode` returns immediately after a delivered push
+ * (the model ends its turn on the render's instruction — the conversation
+ * simply stops), and the user decides later in the plan panel. The gate
+ * holds that pending decision and its handlers; `decide()` (driven by the
+ * review HTTP route) settles the state, broadcasts it to the attached
+ * sidebar views, and fires the handlers that steer the decision back to the
+ * model. Handlers never throw into the route: they are defensive at their
+ * definition site.
  *
- * Every state change broadcasts a `{ kind: 'review', review }` frame to the
- * attached sidebar views, and `attach()` replays the latest state (including
- * a pending review) so a page refresh restores the action bar.
- *
- * Error wording mirrors the built-in popup flow verbatim so the model sees
- * identical guidance whichever surface the user decided on.
+ * Every state change broadcasts a `{ kind: 'review', review }` frame, and
+ * `attach()` replays the latest state (including a pending review) so a page
+ * refresh restores the action bar.
  *
  * @module @huanlin/dsh-plugin-better-plan/review-gate
  */
@@ -43,21 +41,24 @@ export interface ReviewFrame {
 /** One attached sidebar view's review-frame sender. */
 export type ReviewSender = (frame: ReviewFrame) => void
 
-interface Waiter {
-  review: ReviewState
-  resolve: (decision: 'approve') => void
-  reject: (cause: unknown) => void
+/**
+ * The decision side effects, wired by the tool that delivered the plan:
+ * steer the outcome back to the model (approval also flips plan mode off).
+ */
+export interface ReviewHandlers {
+  onApprove(): void
+  onKeep(feedback: string | undefined): void
 }
 
-/** The error that settles a pending review the plugin fiber did not survive. */
-export function pluginReloadedWhileReviewingError(): Error {
-  return new Error('the better-plan plugin was reloaded while the plan was under review; write the plan and present it again')
+interface Waiter {
+  review: ReviewState
+  handlers: ReviewHandlers
 }
 
 /**
- * Per-session review parking plus the attached view set. One pending review
- * per session (the agent loop is parked in the tool call, so a second
- * `begin` supersedes the first defensively).
+ * Per-session pending decision plus the attached view set. One pending
+ * review per session; a newer delivery supersedes the previous one (its
+ * handlers never fire — the newest plan is the one under review).
  */
 export class PlanReviewGate {
   private pending = new Map<string, Waiter>()
@@ -66,36 +67,22 @@ export class PlanReviewGate {
   private subscribers = new Map<string, Set<ReviewSender>>()
 
   /**
-   * Park one review for the session and broadcast it. The returned promise
-   * resolves `'approve'` when the user approves, and rejects with the same
-   * corrective errors the built-in popup flow produces otherwise.
+   * Record one pending review and broadcast it.
    * @param sessionId - the session whose plan is under review.
-   * @param review - the delivery identity to park (id from the delivery push).
-   * @param signal - the tool call's signal; aborting settles the review as
-   *   cancelled and rejects with the abort reason (matches the popup flow,
-   *   where an abort propagates its own error).
-   * @returns a promise resolving only on approval.
+   * @param review - the delivery identity (id from the delivery push).
+   * @param handlers - the decision side effects (steer back to the model).
    */
-  begin(sessionId: string, review: { id: string; path: string; title: string }, signal?: AbortSignal): Promise<'approve'> {
+  begin(sessionId: string, review: { id: string; path: string; title: string }, handlers: ReviewHandlers): void {
     const existing = this.pending.get(sessionId)
     if (existing !== undefined) {
-      // Unreachable through the tool flow (the loop is parked in the first
-      // call); settle defensively so a stray waiter cannot leak.
+      // Superseded: the older plan is no longer the one under review and its
+      // decision surface is gone, so its handlers must never fire.
+      this.pending.delete(sessionId)
       this.settle(sessionId, { ...existing.review, status: 'cancelled' })
-      existing.reject(new Error('a newer plan delivery superseded the pending review'))
     }
-    return new Promise<'approve'>((resolve, reject) => {
-      const waiter: Waiter = { review: { ...review, status: 'pending' }, resolve, reject }
-      const onAbort = (): void => {
-        if (this.pending.get(sessionId) !== waiter) return
-        this.pending.delete(sessionId)
-        this.settle(sessionId, { ...waiter.review, status: 'cancelled' })
-        reject(signal?.reason instanceof Error ? signal.reason : new Error('the plan review was aborted'))
-      }
-      signal?.addEventListener('abort', onAbort, { once: true })
-      this.pending.set(sessionId, waiter)
-      this.settle(sessionId, waiter.review)
-    })
+    const waiter: Waiter = { review: { ...review, status: 'pending' }, handlers }
+    this.pending.set(sessionId, waiter)
+    this.settle(sessionId, waiter.review)
   }
 
   /**
@@ -103,26 +90,21 @@ export class PlanReviewGate {
    * @param sessionId - the session under review.
    * @param decision - the user's choice.
    * @param feedback - optional keep-planning feedback (trimmed; forwarded to
-   *   the model verbatim in the tool error).
+   *   the model verbatim in the steer message).
    * @returns the settled review state, or undefined when nothing is pending.
    */
   decide(sessionId: string, decision: 'approve' | 'keep', feedback?: string): ReviewState | undefined {
     const waiter = this.pending.get(sessionId)
     if (waiter === undefined) return undefined
     this.pending.delete(sessionId)
-    if (decision === 'approve') {
-      waiter.resolve('approve')
-      return this.settle(sessionId, { ...waiter.review, status: 'approved' })
-    }
-    const trimmed = feedback?.trim() ?? ''
-    waiter.reject(new Error(trimmed === ''
-      ? 'The user chose to keep planning; revise the plan file and present it again.'
-      : `The user chose to keep planning; their feedback: ${trimmed}`))
-    return this.settle(sessionId, { ...waiter.review, status: 'kept' })
+    const settled = this.settle(sessionId, { ...waiter.review, status: decision === 'approve' ? 'approved' : 'kept' })
+    if (decision === 'approve') waiter.handlers.onApprove()
+    else waiter.handlers.onKeep(feedback?.trim() || undefined)
+    return settled
   }
 
   /**
-   * Read the session's pending review (stale-click guard for the HTTP route).
+   * Read the session's pending review (stale-click guard + GET bootstrap).
    * @param sessionId - the session to inspect.
    * @returns the pending review, or null when nothing is parked.
    */
@@ -152,12 +134,15 @@ export class PlanReviewGate {
     }
   }
 
-  /** Settle every pending review and drop the views (plugin teardown). */
+  /**
+   * Settle every pending review as cancelled and drop the views (plugin
+   * teardown). Handlers do not fire: a reload discards the decision surface,
+   * and the user re-drives the session.
+   */
   dispose(): void {
     for (const [sessionId, waiter] of this.pending) {
       this.pending.delete(sessionId)
       this.settle(sessionId, { ...waiter.review, status: 'cancelled' })
-      waiter.reject(pluginReloadedWhileReviewingError())
     }
     this.subscribers.clear()
   }

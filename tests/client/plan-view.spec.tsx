@@ -57,27 +57,42 @@ describe('planPathOf', () => {
 })
 
 describe('PlanView', () => {
-  it('renders the fetched plan through MarkdownText with the session-scoped fs.read', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(fetchResponse({ ok: true, value: { kind: 'text', content: '# The plan\n\nbody', truncated: false } }))
+  /** Route mocks by URL: the review bootstrap (GET) answers separately from fs.read. */
+  function stubUrlFetch(fsReadResponses: unknown[], reviewResponse: unknown = { ok: true, review: null }): ReturnType<typeof vi.fn> {
+    let readIndex = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).startsWith(REVIEW_API_PATH)) return Promise.resolve(fetchResponse(reviewResponse))
+      const body = fsReadResponses[Math.min(readIndex, fsReadResponses.length - 1)]
+      readIndex += 1
+      return Promise.resolve(fetchResponse(body))
+    })
     vi.mocked(fetch).mockImplementation(fetchMock as never)
+    return fetchMock
+  }
+
+  it('renders the fetched plan through MarkdownText with the session-scoped fs.read', async () => {
+    const fetchMock = stubUrlFetch([{ ok: true, value: { kind: 'text', content: '# The plan\n\nbody', truncated: false } }])
     render(createElement(PlanView, tabProps()))
     await waitFor(() => {
       expect(screen.getByTestId('markdown')).toBeDefined()
       expect(screen.getByTestId('markdown').textContent).toBe('# The plan\n\nbody')
     })
-    const [url, init] = vi.mocked(fetch).mock.calls[0] as [string, RequestInit]
+    const [url, init] = vi.mocked(fetch).mock.calls.find(([candidate]) => candidate === '/sidebar/api/fs.read') as [string, RequestInit]
     expect(url).toBe('/sidebar/api/fs.read')
     expect(JSON.parse(String(init.body))).toEqual({ sessionId: 's1', path: '/repo/meta.md' })
     expect(screen.getByText('The plan')).toBeDefined()
     expect(screen.getByText('/repo/meta.md')).toBeDefined()
     expect(screen.getByText('Open in editor')).toBeDefined()
+    // The review bootstrap rode along and found nothing pending.
+    expect(reviewStore.get()).toBeNull()
+    expect(fetchMock).toHaveBeenCalled()
   })
 
   it('shows the error state with a working retry', async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(fetchResponse({ ok: false, error: { code: 'fs-error', message: 'boom' } }))
-      .mockResolvedValueOnce(fetchResponse({ ok: true, value: { kind: 'text', content: '# Recovered', truncated: false } }))
-    vi.mocked(fetch).mockImplementation(fetchMock as never)
+    const fetchMock = stubUrlFetch([
+      { ok: false, error: { code: 'fs-error', message: 'boom' } },
+      { ok: true, value: { kind: 'text', content: '# Recovered', truncated: false } },
+    ])
     render(createElement(PlanView, tabProps()))
     expect(await screen.findByText('Failed to read the plan: boom')).toBeDefined()
     expect(screen.queryByTestId('markdown')).toBeNull()
@@ -85,7 +100,7 @@ describe('PlanView', () => {
     await waitFor(() => {
       expect(screen.getByTestId('markdown').textContent).toBe('# Recovered')
     })
-    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock).toHaveBeenCalledTimes(3) // bootstrap + read + retry read
   })
 
   it('flags a binary read result as a review-in-editor case', async () => {
@@ -106,10 +121,10 @@ describe('PlanView', () => {
 })
 
 describe('PlanView review action bar (the sidebar approval surface)', () => {
-  /** Stub fetch for both the fs.read and the review decision endpoints. */
+  /** Stub fetch for the fs.read endpoint and both review verbs (GET bootstrap + POST decision). */
   function stubReviewFetch(reviewResponse: unknown, ok = true): void {
     vi.mocked(fetch).mockImplementation(((input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input) === REVIEW_API_PATH) return Promise.resolve(fetchResponse(reviewResponse, ok))
+      if (String(input).startsWith(REVIEW_API_PATH)) return Promise.resolve(fetchResponse(reviewResponse, ok))
       return Promise.resolve(fetchResponse({ ok: true, value: { kind: 'text', content: '# The plan', truncated: false } }))
     }) as never)
   }
@@ -120,6 +135,24 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
     await screen.findByTestId('markdown')
     expect(screen.queryByText('Approve')).toBeNull()
     expect(screen.queryByText('Keep planning')).toBeNull()
+  })
+
+  it('the HTTP bootstrap fills the bar when no WS frame arrived', async () => {
+    stubReviewFetch({ ok: true, review: { id: 'r9', path: '/repo/meta.md', title: 'The plan', status: 'pending' } })
+    render(createElement(PlanView, tabProps()))
+    expect(await screen.findByText(/Review this plan here/)).toBeDefined()
+    expect(reviewStore.get()?.id).toBe('r9')
+  })
+
+  it('the bootstrap never clears a live pending bar with a late null', async () => {
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: null })
+    render(createElement(PlanView, tabProps()))
+    await screen.findByText(/Review this plan here/)
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith(REVIEW_API_PATH))).toBe(true)
+    })
+    expect(reviewStore.get()?.status).toBe('pending')
   })
 
   it('a pending review renders the buttons and Approve posts the decision', async () => {

@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { PlanReviewGate, pluginReloadedWhileReviewingError, type ReviewFrame } from '../src/review-gate.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { PlanReviewGate, type ReviewFrame, type ReviewHandlers } from '../src/review-gate.ts'
 
 const REVIEW = { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }
 
@@ -8,92 +8,84 @@ function statusesOf(frames: ReviewFrame[]): Array<'pending' | 'approved' | 'kept
   return frames.map(frame => frame.review === null ? null : frame.review?.status ?? null)
 }
 
+/** Spied handlers recording which decisions fired. */
+function spyHandlers(): ReviewHandlers & { approvals: number; keeps: Array<string | undefined> } {
+  const handlers = {
+    approvals: 0,
+    keeps: [] as Array<string | undefined>,
+    onApprove: vi.fn(() => { handlers.approvals += 1 }),
+    onKeep: vi.fn((feedback: string | undefined) => { handlers.keeps.push(feedback) }),
+  }
+  return handlers
+}
+
 describe('PlanReviewGate.begin/decide', () => {
-  it('resolves approve and records the settled state', async () => {
+  it('records the pending review, then fires onApprove and broadcasts the settled state', () => {
     const gate = new PlanReviewGate()
     const frames: ReviewFrame[] = []
-    const detach = gate.attach('s1', frame => frames.push(frame))
-    const parked = gate.begin('s1', REVIEW)
+    const handlers = spyHandlers()
+    gate.attach('s1', frame => frames.push(frame))
+    gate.begin('s1', REVIEW, handlers)
     expect(gate.peek('s1')).toMatchObject({ id: 'd1', status: 'pending' })
+    expect(handlers.approvals).toBe(0)
     const settled = gate.decide('s1', 'approve')
-    await expect(parked).resolves.toBe('approve')
     expect(settled).toMatchObject({ id: 'd1', status: 'approved' })
+    expect(handlers.approvals).toBe(1)
     expect(statusesOf(frames)).toEqual([null, 'pending', 'approved'])
-    detach()
   })
 
-  it('rejects keep planning with the popup flow wording and forwards feedback', async () => {
+  it('keep planning fires onKeep with the trimmed feedback', () => {
     const gate = new PlanReviewGate()
-    const parked = gate.begin('s1', REVIEW)
+    const handlers = spyHandlers()
+    gate.begin('s1', REVIEW, handlers)
     gate.decide('s1', 'keep', '  consider the resume path  ')
-    await expect(parked).rejects.toThrow('The user chose to keep planning; their feedback: consider the resume path')
+    expect(handlers.keeps).toEqual(['consider the resume path'])
     expect(gate.peek('s1')).toBeNull()
   })
 
-  it('keep planning without feedback uses the generic corrective error', async () => {
+  it('keep planning without feedback hands undefined to onKeep', () => {
     const gate = new PlanReviewGate()
-    const parked = gate.begin('s1', REVIEW)
+    const handlers = spyHandlers()
+    gate.begin('s1', REVIEW, handlers)
     gate.decide('s1', 'keep')
-    await expect(parked).rejects.toThrow('The user chose to keep planning; revise the plan file and present it again.')
+    expect(handlers.keeps).toEqual([undefined])
   })
 
-  it('returns undefined when deciding with nothing pending', () => {
+  it('returns undefined and stays silent when deciding with nothing pending', () => {
     const gate = new PlanReviewGate()
+    const handlers = spyHandlers()
     expect(gate.decide('s1', 'approve')).toBeUndefined()
+    expect(handlers.approvals).toBe(0)
     expect(gate.peek('s1')).toBeNull()
   })
 
-  it('a stale click on a superseded delivery id is visible through peek', () => {
+  it('a newer delivery supersedes the pending review and its handlers never fire', () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', { id: 'd1', path: '/old.md', title: 'Old' }).catch(() => {
-      // Superseded rejection is asserted in the dedicated test below; this
-      // test only reads the peek face.
-    })
-    gate.begin('s1', { id: 'd2', path: '/new.md', title: 'New' })
+    const first = spyHandlers()
+    const second = spyHandlers()
+    gate.begin('s1', { id: 'd1', path: '/old.md', title: 'Old' }, first)
+    gate.begin('s1', { id: 'd2', path: '/new.md', title: 'New' }, second)
     expect(gate.peek('s1')?.id).toBe('d2')
-  })
-
-  it('begin supersedes a stray pending review instead of leaking it', async () => {
-    const gate = new PlanReviewGate()
-    const first = gate.begin('s1', { id: 'd1', path: '/old.md', title: 'Old' })
-    const second = gate.begin('s1', REVIEW)
-    await expect(first).rejects.toThrow('a newer plan delivery superseded the pending review')
+    // A click on the superseded delivery id is refused by the route's stale
+    // guard; the gate itself settles by session key, so only the newest
+    // handlers can ever fire.
     gate.decide('s1', 'approve')
-    await expect(second).resolves.toBe('approve')
+    expect(second.approvals).toBe(1)
+    expect(first.approvals).toBe(0)
   })
 })
 
-describe('PlanReviewGate abort and disposal', () => {
-  it('an aborted tool call settles the review as cancelled and rejects with the abort reason', async () => {
+describe('PlanReviewGate disposal', () => {
+  it('dispose settles pending reviews as cancelled and never fires handlers', () => {
     const gate = new PlanReviewGate()
+    const handlers = spyHandlers()
     const frames: ReviewFrame[] = []
-    gate.attach('s1', frame => frames.push(frame))
-    const controller = new AbortController()
-    const parked = gate.begin('s1', REVIEW, controller.signal)
-    controller.abort(new Error('user stopped the turn'))
-    await expect(parked).rejects.toThrow('user stopped the turn')
-    expect(gate.peek('s1')).toBeNull()
-    expect(statusesOf(frames)).toEqual([null, 'pending', 'cancelled'])
-  })
-
-  it('an abort after the decision is a no-op', async () => {
-    const gate = new PlanReviewGate()
-    const controller = new AbortController()
-    const parked = gate.begin('s1', REVIEW, controller.signal)
-    gate.decide('s1', 'approve')
-    await expect(parked).resolves.toBe('approve')
-    controller.abort()
-    await expect(parked).resolves.toBe('approve')
-  })
-
-  it('dispose rejects pending reviews with the reload error and clears the views', async () => {
-    const gate = new PlanReviewGate()
-    const parked = gate.begin('s1', REVIEW)
-    const frames: ReviewFrame[] = []
+    gate.begin('s1', REVIEW, handlers)
     gate.attach('s1', frame => frames.push(frame))
     gate.dispose()
-    await expect(parked).rejects.toThrow(pluginReloadedWhileReviewingError().message)
     expect(gate.peek('s1')).toBeNull()
+    expect(handlers.approvals).toBe(0)
+    expect(handlers.keeps).toEqual([])
     expect(frames.at(-1)?.review?.status).toBe('cancelled')
   })
 })
@@ -101,7 +93,7 @@ describe('PlanReviewGate abort and disposal', () => {
 describe('PlanReviewGate attach replay', () => {
   it('replays the latest state on attach, including a pending review', () => {
     const gate = new PlanReviewGate()
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, spyHandlers())
     const frames: ReviewFrame[] = []
     gate.attach('s1', frame => frames.push(frame))
     expect(frames).toEqual([{ kind: 'review', review: { ...REVIEW, status: 'pending' } }])
@@ -118,9 +110,10 @@ describe('PlanReviewGate attach replay', () => {
     const gate = new PlanReviewGate()
     const first: ReviewFrame[] = []
     const second: ReviewFrame[] = []
+    const handlers = spyHandlers()
     const detach = gate.attach('s1', frame => first.push(frame))
     gate.attach('s1', frame => second.push(frame))
-    gate.begin('s1', REVIEW)
+    gate.begin('s1', REVIEW, handlers)
     detach()
     gate.decide('s1', 'approve')
     expect(statusesOf(first)).toEqual([null, 'pending'])

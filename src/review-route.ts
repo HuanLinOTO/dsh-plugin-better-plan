@@ -75,8 +75,10 @@ export function parseReviewDecisionBody(raw: string): { value: ReviewDecisionBod
 }
 
 /**
- * Serve one review decision request.
- * @param gate - the review gate holding the parked review.
+ * Serve one review request: GET bootstraps the plan panel's action bar with
+ * the current state (the WS attach replay remains the live channel); POST
+ * settles the pending decision.
+ * @param gate - the review gate holding the pending review.
  * @param req - the request (method/headers/body iterator).
  * @param res - the response.
  * @param trustedHosts - non-loopback authorities the deployment serves.
@@ -91,11 +93,21 @@ export async function handleReviewRequest(
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
   }
-  if (req.method !== 'POST') {
-    return json(405, { ok: false, error: 'POST only' })
+  if (req.method !== 'POST' && req.method !== 'GET') {
+    return json(405, { ok: false, error: 'GET or POST only' })
   }
   if (!isTrustedDeliveryRequest(req, trustedHosts)) {
     return json(403, { ok: false, error: 'untrusted origin' })
+  }
+  if (req.method === 'GET') {
+    // Bootstrap the plan panel's action bar with the current state; the WS
+    // attach replay remains the live channel.
+    const url = new URL(req.url ?? '/', 'http://dsh.internal')
+    const sessionId = url.searchParams.get('session')
+    if (sessionId === null || sessionId === '') {
+      return json(400, { ok: false, error: 'session is required' })
+    }
+    return json(200, { ok: true, review: gate.peek(sessionId) })
   }
   let raw = ''
   let bytes = 0

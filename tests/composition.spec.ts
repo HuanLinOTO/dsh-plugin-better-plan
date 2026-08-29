@@ -124,18 +124,23 @@ async function agentWithSession(
   harness: Harness,
   id: string,
   { active, cwd }: { active?: boolean; cwd?: string } = {},
-): Promise<Agent & { session: Session }> {
+): Promise<Agent & { session: Session; steered: UserMessage[] }> {
   const header: Record<string, unknown> = { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: 0 }
   if (cwd !== undefined) header.cwd = cwd
   const session = Session.create(SessionId(id), undefined, header as never)
+  const steered: UserMessage[] = []
   const agent = {
     id: SessionId(id),
     session,
     options: {},
+    steered,
     inject(message: UserMessage) {
       session.append('user/message', message, { surfaceOp: 'append' })
     },
-  } as unknown as Agent & { session: Session }
+    steer(message: UserMessage) {
+      steered.push(message)
+    },
+  } as unknown as Agent & { session: Session; steered: UserMessage[] }
   let scoped!: Context
   await harness.ctx.plugin(Object.assign((inner: Context) => { scoped = createScope(inner, agent).ctx }, {
     inject: ['tools'],
@@ -174,14 +179,6 @@ async function boundary(harness: Harness, agent: Agent & { session: Session }): 
     { messages: [message], turn: 1, step: 1, signal: new AbortController().signal },
     () => Promise.resolve({ kind: 'enter' as const, messages: [message] }),
   )
-}
-
-/** Wait for a condition that becomes true across I/O ticks. */
-async function waitFor(condition: () => boolean): Promise<void> {
-  for (let waited = 0; !condition() && waited < 200; waited++) {
-    await new Promise(resolve => setImmediate(resolve))
-  }
-  expect(condition()).toBe(true)
 }
 
 /** A fake review POST request (one-chunk body iterator). */
@@ -269,7 +266,7 @@ describe('exit_plan_mode delivery flow', () => {
 
     expect(result.isError).toBe(false)
     if (result.isError) throw new Error('expected approved result')
-    expect(result.value).toEqual({ approved: true, delivered: false })
+    expect(result.value).toEqual({ delivered: false, decision: 'approved' })
     expect(result.content).toEqual([{
       type: 'text',
       text: 'Plan approved — plan mode exited; carry out the plan starting with your next step. (No sidebar plan panel is connected; the plan file is at plan.md.)',
@@ -420,8 +417,8 @@ describe('exit_plan_mode delivery flow', () => {
   })
 })
 
-describe('sidebar review flow (a connected view parks the call, no popup)', () => {
-  it('approve: parks silently, the route decision settles it, and the mode flips at the boundary', async () => {
+describe('sidebar review flow (delivery returns at once, the decision steers back)', () => {
+  it('approve: returns pending with the end-turn narration, no popup; the route decision flips the mode and steers the next turn', async () => {
     const harness = await setupDirect()
     const sessionId = 'side-approve-1'
     const deliveries: unknown[] = []
@@ -432,61 +429,82 @@ describe('sidebar review flow (a connected view parks the call, no popup)', () =
     await writeFile(planPath, '# The plan\n\ndo things', 'utf8')
     const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
 
-    const pending = callExit(harness, agent, 'plan.md')
-    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
+    const result = await callExit(harness, agent, 'plan.md')
 
-    // No chat popup: the question channel never fired.
+    // The call returns at once — nothing parks, nothing hangs.
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected pending result')
+    expect(result.value).toEqual({ delivered: true, decision: 'pending' })
+    expect(result.content).toHaveLength(1)
+    expect(result.content[0]?.type === 'text' && result.content[0].text).toContain('End your turn now')
+    // No chat popup: the question channel never fired; the plan panel saw
+    // the delivery and the pending review.
     expect(harness.asked).toHaveLength(0)
-    // The plan panel saw the delivery and the pending review.
     expect(deliveries).toHaveLength(1)
     expect(reviews.map(frame => frame.review === null ? null : frame.review?.status ?? null)).toEqual([null, 'pending'])
+    // The mode stays on while the review is open.
+    expect(foldPlanMode(agent.session.events)).toBe(true)
 
     const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
     expect(res.status).toBe(200)
-    const result = await pending
-    expect(result.isError).toBe(false)
-    if (result.isError) throw new Error('expected approved result')
-    expect(result.value).toEqual({ approved: true, delivered: true })
-    // The decision broadcast reaches the view, and the flip lands at the boundary.
+    // Out-of-turn approval: the flip appends immediately and the decision is
+    // steered back as the next turn's message.
     expect(reviews.at(-1)?.review?.status).toBe('approved')
-    expect(foldPlanMode(agent.session.events)).toBe(true)
-    await boundary(harness, agent)
     expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(agent.steered).toHaveLength(1)
+    const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
+    expect(steerText?.type === 'text' && steerText.text).toContain('approved the plan in the sidebar plan panel')
     detachDelivery()
     detachReview()
   })
 
-  it('keep planning from the sidebar returns the corrective error and never queues the flip', async () => {
+  it('keep planning from the sidebar steers the feedback back and never flips the mode', async () => {
     const harness = await setupDirect()
     const sessionId = 'side-keep-1'
     harness.registry.attach(sessionId, () => {})
     harness.reviewGate.attach(sessionId, () => {})
     await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
     const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
-    const pending = callExit(harness, agent, 'plan.md')
-    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
+    const result = await callExit(harness, agent, 'plan.md')
+    expect(result.isError).toBe(false)
+    if (result.isError) throw new Error('expected pending result')
+    expect(result.value).toEqual({ delivered: true, decision: 'pending' })
+    expect(harness.asked).toHaveLength(0)
+
     const res = await postDecision(harness, { session: sessionId, decision: 'keep', feedback: 'consider the resume path' })
     expect(res.status).toBe(200)
-    const result = await pending
-    expect(result.isError).toBe(true)
-    expect(result.content).toEqual([{ type: 'text', text: 'Error: The user chose to keep planning; their feedback: consider the resume path' }])
-    await boundary(harness, agent)
     expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(agent.steered).toHaveLength(1)
+    const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
+    expect(steerText?.type === 'text' && steerText.text).toContain('chose to keep planning')
+    expect(steerText?.type === 'text' && steerText.text).toContain('Their feedback: consider the resume path')
   })
 
-  it('stopping the turn (abort) cancels the parked review with its own message', async () => {
+  it('a second delivery supersedes the open review: only the newest handlers can fire', async () => {
     const harness = await setupDirect()
-    const sessionId = 'side-abort-1'
+    const sessionId = 'side-supersede-1'
     harness.registry.attach(sessionId, () => {})
-    await writeFile(join(harness.dir, 'plan.md'), '# The plan', 'utf8')
+    harness.reviewGate.attach(sessionId, () => {})
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan v1', 'utf8')
     const agent = await agentWithSession(harness, sessionId, { active: true, cwd: harness.dir })
-    const controller = new AbortController()
-    const pending = callExit(harness, agent, 'plan.md', controller.signal)
-    await waitFor(() => harness.reviewGate.peek(sessionId) !== null)
-    controller.abort(new Error('user stopped the turn'))
-    const result = await pending
-    expect(result.isError).toBe(true)
-    expect(result.content).toEqual([{ type: 'text', text: 'Error: user stopped the turn' }])
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    await callExit(harness, agent, 'plan.md')
+    const firstReview = harness.reviewGate.peek(sessionId)
+    expect(firstReview).not.toBeNull()
+    // Revise and re-deliver.
+    await writeFile(join(harness.dir, 'plan.md'), '# The plan v2', 'utf8')
+    await callExit(harness, agent, 'plan.md')
+    const secondReview = harness.reviewGate.peek(sessionId)
+    expect(secondReview?.id).not.toBe(firstReview?.id)
+
+    // The stale window still holds the first id: refused, nothing settles.
+    const stale = await postDecision(harness, { session: sessionId, decision: 'approve', id: firstReview?.id })
+    expect(stale.status).toBe(409)
+    expect(harness.reviewGate.peek(sessionId)?.id).toBe(secondReview?.id)
+
+    // The fresh decision lands.
+    const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
+    expect(res.status).toBe(200)
+    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(agent.steered).toHaveLength(1)
   })
 })

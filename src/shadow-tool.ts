@@ -12,19 +12,15 @@
  *
  * What changes is the delivery: the model must write the COMPLETE plan to a
  * markdown file first (guided by this description — D2 verifies only that the
- * file exists and is readable), then pass its path. The tool reads the file
- * and pushes it to the session's sidebar plan panel through the delivery
- * registry. When the push reached a connected sidebar view the tool call
- * PARKS on the review gate — the conversation stops with no approval popup,
- * and the user reviews the plan and decides in the sidebar plan panel. When
- * no view is attached the built-in plan-review question renders in chat with
- * the full plan text (no-sidebar environment ⇒ the original experience).
- *
- * Approval keeps the built-in approval semantics AND the built-in mode
- * switch: the preset realm's `planMode` service is invisible to this plugin,
- * so the `plan/mode: false` append is deferred to the next accepted
- * `agent/pre-step` boundary here (the same mechanism the built-in controller
- * uses; the tool result is the narration, so nothing extra is injected).
+ * file exists and is readable), then pass its path. When the push reaches a
+ * connected sidebar view, the tool RETURNS IMMEDIATELY with `decision:
+ * 'pending'` — the render instructs the model to end its turn, so the
+ * conversation simply stops with no approval popup — and the user reviews the
+ * plan and decides in the sidebar plan panel. The decision is steered back as
+ * the next turn's message (approval also flips plan mode off, see the review
+ * handlers below). When no view is attached, the built-in plan-review
+ * question renders in chat with the full plan text and blocks exactly like
+ * the original tool (no-sidebar environment ⇒ the original experience).
  *
  * Conventions (per plugin-development-guide.md §3):
  *   C4 — `execute` returns one canonical JSON value; `render` is separate.
@@ -36,6 +32,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
 import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
@@ -57,21 +54,49 @@ export const APPROVE_LABEL = 'Approve'
 export const KEEP_PLANNING_LABEL = 'Keep planning'
 
 /**
+ * The canonical tool value: `pending` = the plan reached the sidebar and the
+ * decision comes later (the model must end its turn); `approved` = the
+ * no-sidebar popup path answered in-turn. `delivered` distinguishes the
+ * push outcome for the render's context note.
+ */
+export interface ExitPlanValue {
+  delivered: boolean
+  decision: 'pending' | 'approved'
+}
+
+/** The steer message fired when the sidebar approval lands. */
+export const APPROVAL_STEER_TEXT =
+  '[Plan review] The user approved the plan in the sidebar plan panel. Plan mode is now off — carry out the plan starting with this step.'
+
+/**
+ * The steer message fired when the sidebar keeps planning.
+ * @param feedback - the user's optional feedback (already trimmed).
+ * @returns the steer text.
+ */
+export function keepPlanningSteerText(feedback: string | undefined): string {
+  return '[Plan review] The user chose to keep planning after reviewing the plan in the sidebar plan panel.'
+    + (feedback === undefined ? '' : ` Their feedback: ${feedback}.`)
+    + ' Stay in plan mode: revise the plan file and present it again with exit_plan_mode.'
+}
+
+/**
  * The model-facing description. The model's only new knowledge: the
- * file-first contract, the sidebar plan panel, and the unchanged review flow.
- * `planDir` is interpolated into the example path.
+ * file-first contract, the immediate-return + end-turn contract, and the
+ * decision arriving as the next message. `planDir` is interpolated into the
+ * example path.
  * @param config - the plugin config (planDir suggestion).
  * @returns the description string.
  */
 export function exitPlanDescription(config: BetterPlanConfig): string {
   return `Use only in plan mode. Before calling, write the COMPLETE plan as markdown to a file with the write tool (e.g. \`${config.planDir}/YYYY-MM-DD-<topic>.md\`), then pass its path here. `
-    + 'The plan opens in the sidebar plan panel for the user\'s review; the user may approve (carry out the plan from your next step) or keep '
-    + 'planning — their feedback comes back in the tool result; revise the file and present again.'
+    + 'The plan opens in the sidebar plan panel and the call returns immediately — end your turn right after it and wait; the user reviews and '
+    + 'decides there. Their decision arrives as the next message: approval switches plan mode off for you to carry out the plan; keep-planning '
+    + 'feedback asks you to revise the file and present it again.'
 }
 
 /**
  * The review question's detail: the full plan text. Only the no-sidebar
- * fallback reaches the question (a delivered plan parks on the review gate
+ * fallback reaches the question (a delivered plan is reviewed in the sidebar
  * instead), so the user always sees the whole plan on the popup card.
  * @param plan - the full plan markdown.
  * @returns the detail string for the plan-review question.
@@ -80,13 +105,22 @@ export function reviewDetail(plan: string): string {
   return plan
 }
 
-/** The model-facing render of an approved delivery. */
-function renderApproved(args: { path: string }, value: { approved: true; delivered: boolean }): { type: 'text'; text: string }[] {
+/**
+ * The model-facing render. The pending branch IS the end-of-turn contract:
+ * the conversation stops because the model stops here.
+ */
+function renderResult(args: { path: string }, value: ExitPlanValue): { type: 'text'; text: string }[] {
+  if (value.decision === 'pending') {
+    return [{
+      type: 'text',
+      text: 'Plan presented to the user in the sidebar plan panel. End your turn now: briefly note that the plan is awaiting their review there, '
+        + 'then stop — do not call any more tools. Their decision arrives as the next message: approval switches plan mode off for you to carry '
+        + 'out the plan; keep-planning feedback asks you to revise the file and present it again.',
+    }]
+  }
   return [{
     type: 'text',
-    text: value.delivered
-      ? 'Plan approved — plan mode exited; carry out the plan starting with your next step. The plan is open in the sidebar plan panel.'
-      : `Plan approved — plan mode exited; carry out the plan starting with your next step. (No sidebar plan panel is connected; the plan file is at ${args.path}.)`,
+    text: `Plan approved — plan mode exited; carry out the plan starting with your next step. (No sidebar plan panel is connected; the plan file is at ${args.path}.)`,
   }]
 }
 
@@ -98,7 +132,7 @@ export interface ShadowToolDeps {
   config: BetterPlanConfig
   /** The delivery registry (per-session queue + views). */
   registry: PlanDeliveryRegistry
-  /** The sidebar review gate (parks a delivered call until the user decides). */
+  /** The sidebar review gate (records the pending decision + handlers). */
   reviewGate: PlanReviewGate
   /** Whether the plugin fiber was disposed while a review may be pending. */
   isDisposed: () => boolean
@@ -129,15 +163,20 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
         type: 'object',
         additionalProperties: false,
         properties: {
-          approved: { type: 'boolean', const: true, required: true },
           delivered: {
             type: 'boolean',
             required: true,
             description: 'Whether the plan was pushed to a connected sidebar plan panel at call time (false = queued for the next view attach, or no sidebar installed).',
           },
+          decision: {
+            type: 'string',
+            enum: ['pending', 'approved'],
+            required: true,
+            description: 'pending = the sidebar review is open; end the turn and wait. approved = the in-chat review answered approve.',
+          },
         },
       },
-      render: renderApproved,
+      render: renderResult,
     },
     execute: async (args: { path: string }, exec) => {
       exec.signal.throwIfAborted()
@@ -176,16 +215,33 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       const title = firstHeading(plan) ?? basenameOf(absolute)
       const { id, delivered } = registry.enqueue(sessionId, absolute, title)
       if (delivered) {
-        // Sidebar review: park the call. The conversation stops here — no
-        // approval popup renders in chat — and the user decides in the plan
-        // panel. Keep/cancel/abort reject with the popup flow's wording, so
-        // the model sees identical guidance from either review surface.
-        await deps.reviewGate.begin(sessionId, { id, path: absolute, title }, exec.signal)
-        // Queue the mode flip for the next accepted pre-step boundary (the
-        // preset realm's planMode service is unreachable from here). The
-        // tool result is the narration, so no extra notice is injected.
-        deps.onApproved(agent.session)
-        return { approved: true as const, delivered: true }
+        // Sidebar review: return immediately (the render ends the turn) and
+        // steer the decision back when the user makes it in the plan panel.
+        deps.reviewGate.begin(sessionId, { id, path: absolute, title }, {
+          onApprove: () => {
+            // Between turns the append lands immediately (the built-in
+            // controller does the same when the fold is idle). A failed
+            // durable append retries through the pendingExits boundary flush
+            // at the steered turn's first accepted pre-step.
+            try {
+              agent.session.append('plan/mode', { active: false })
+            } catch (error) {
+              ctx.logger.warn('dsh-plugin-better-plan: the approved plan exit could not be appended directly; deferring to the next boundary: %o', error)
+              deps.onApproved(agent.session)
+            }
+            agent.steer(createUserMessage({
+              content: [{ type: 'text' as const, text: APPROVAL_STEER_TEXT }],
+              source: { kind: 'user' as const },
+            }))
+          },
+          onKeep: (feedback) => {
+            agent.steer(createUserMessage({
+              content: [{ type: 'text' as const, text: keepPlanningSteerText(feedback) }],
+              source: { kind: 'user' as const },
+            }))
+          },
+        })
+        return { delivered: true as const, decision: 'pending' as const }
       }
       const interaction = ctx.get('userQuestions')
       if (interaction === undefined) {
@@ -218,8 +274,8 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
         throw cause
       })
       // A review may outlive this plugin fiber. Without this fiber's pre-step
-      // listener, an approved exit could never be appended, so fail and keep
-      // planning.
+      // listener, an approved selection could never be appended, so fail and
+      // keep planning.
       if (deps.isDisposed()) {
         throw new Error('the better-plan plugin was reloaded while the plan was under review; write the plan and present it again')
       }
@@ -235,7 +291,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       // preset realm's planMode service is unreachable from here). The tool
       // result is the narration, so no extra notice is injected.
       deps.onApproved(agent.session)
-      return { approved: true as const, delivered }
+      return { delivered: false, decision: 'approved' as const }
     },
     presentCall: args => ({
       card: 'generic',
@@ -246,7 +302,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       kind: 'other',
       content: [{
         type: 'text',
-        text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; approve or keep planning there.',
+        text: 'Plan file delivered for review — the complete plan opens in the sidebar plan panel; the conversation waits for the user\'s decision there.',
       }],
     }),
     presentResult: (_args, result) => ({

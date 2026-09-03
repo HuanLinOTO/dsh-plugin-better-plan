@@ -18,13 +18,18 @@ export interface SessionCwdProbe {
         readonly cwd?: string;
     };
 }
-/** The session-persistence face this resolver consults (structural mirror). */
-export interface PersistenceInspect {
-    inspect(sessionId: string): Promise<{
-        meta: {
+/**
+ * The session-persistence face this resolver consults (structural mirror).
+ * dsh 0.1.2-rc.1 rewrote the contract as handle-based snapshots: the old
+ * `inspect(id)` became `stat(id)` returning a `SessionPersistenceSnapshot`
+ * (the header lives under `snapshot.header`), or undefined when unknown.
+ */
+export interface PersistenceStat {
+    stat(sessionId: string): Promise<{
+        header: {
             cwd?: string;
         };
-    }>;
+    } | undefined>;
 }
 /**
  * Resolve one session's working directory.
@@ -33,4 +38,4 @@ export interface PersistenceInspect {
  * @param persistence - the optional session-persistence service.
  * @returns an absolute working directory (never empty).
  */
-export declare function resolveSessionCwd(session: SessionCwdProbe | undefined, sessionId: string, persistence: PersistenceInspect | undefined): Promise<string>;
+export declare function resolveSessionCwd(session: SessionCwdProbe | undefined, sessionId: string, persistence: PersistenceStat | undefined): Promise<string>;

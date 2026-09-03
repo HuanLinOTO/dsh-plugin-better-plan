@@ -12,7 +12,7 @@
  * @module @huanlin/dsh-plugin-better-plan/context
  */
 import type { Context as CordisContext } from '@deepseek-ai/cordis';
-import type { PersistenceInspect } from './resolve-cwd.ts';
+import type { PersistenceStat } from './resolve-cwd.ts';
 /** The upgrade route face this plugin registers on the host webServer. */
 export interface BetterPlanUpgradeRoute {
     path: string;
@@ -74,7 +74,7 @@ export interface BetterPlanContextShape {
     /** The user-questions seam (optional: review degrades without it). */
     userQuestions?: BetterPlanUserQuestions;
     /** The session-persistence service (optional: cwd fallback source). */
-    sessionPersistence?: PersistenceInspect;
+    sessionPersistence?: PersistenceStat;
 }
 /** The Context this plugin's host half sees. */
 export type Context = CordisContext & BetterPlanContextShape;

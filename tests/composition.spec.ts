@@ -125,7 +125,7 @@ async function agentWithSession(
   id: string,
   { active, cwd }: { active?: boolean; cwd?: string } = {},
 ): Promise<Agent & { session: Session; steered: UserMessage[] }> {
-  const header: Record<string, unknown> = { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: 0 }
+  const header: Record<string, unknown> = { version: SESSION_FORMAT_VERSION, id: SessionId(id), createdAt: 0, isSeeded: false }
   if (cwd !== undefined) header.cwd = cwd
   const session = Session.create(SessionId(id), undefined, header as never)
   const steered: UserMessage[] = []

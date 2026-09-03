@@ -14,7 +14,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import UserQuestionService, { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { AskUserQuestionAnswer, AskUserQuestionRequest } from '@deepseek-ai/dsh-user-questions'
-import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
+import { isPlanModeActive } from '../src/plan-fold.ts'
 import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
 import { PLAN_DELIVERY_ANCHOR } from '../src/prompt-override.ts'
 import * as betterPlan from '../src/index.ts'
@@ -286,9 +286,9 @@ describe('exit_plan_mode delivery flow', () => {
     expect(question?.options?.map(option => option.label)).toEqual(['Approve', 'Keep planning'])
     expect(harness.asked[0]?.agent).toBe(agent)
     // The fold stays plan until the boundary flush, then logs the exit.
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
     await boundary(harness, agent)
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
   })
 
   it('falls back to the full plan detail while no sidebar view is attached', async () => {
@@ -353,7 +353,7 @@ describe('exit_plan_mode delivery flow', () => {
     expect(result.isError).toBe(true)
     expect(result.content).toEqual([{ type: 'text', text: 'Error: The user chose to keep planning; their feedback: consider the resume path' }])
     await boundary(harness, agent)
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
   })
 
   it('keep planning without feedback returns the generic corrective error', async () => {
@@ -374,7 +374,7 @@ describe('exit_plan_mode delivery flow', () => {
       type: 'text',
       text: 'Error: The user dismissed the plan review to speak instead; stay in plan mode, stop here, and wait for their message.',
     }])
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
   })
 
   it('fails the call when the plugin is disposed while the review awaits (no phantom exit)', async () => {
@@ -397,7 +397,7 @@ describe('exit_plan_mode delivery flow', () => {
     const result = await pending
     expect(result.isError).toBe(true)
     expect(result.content).toEqual([{ type: 'text', text: 'Error: the better-plan plugin was reloaded while the plan was under review; write the plan and present it again' }])
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
   })
 
   it('keeps the flip pending through a failed append and lands it at the next boundary', async () => {
@@ -414,10 +414,10 @@ describe('exit_plan_mode delivery flow', () => {
     await callExit(harness, agent, 'plan.md')
     await boundary(harness, agent)
     expect(warn).toHaveBeenCalledOnce()
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
     agent.session.append = original
     await boundary(harness, agent)
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
   })
 })
 
@@ -447,14 +447,14 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     expect(deliveries).toHaveLength(1)
     expect(reviews.map(frame => frame.review === null ? null : frame.review?.status ?? null)).toEqual([null, 'pending'])
     // The mode stays on while the review is open.
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
 
     const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
     expect(res.status).toBe(200)
     // Out-of-turn approval: the flip appends immediately and the decision is
     // steered back as the next turn's message.
     expect(reviews.at(-1)?.review?.status).toBe('approved')
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
     expect(agent.steered).toHaveLength(1)
     const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
     expect(steerText?.type === 'text' && steerText.text).toContain('approved the plan in the sidebar plan panel')
@@ -477,7 +477,7 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
 
     const res = await postDecision(harness, { session: sessionId, decision: 'keep', feedback: 'consider the resume path' })
     expect(res.status).toBe(200)
-    expect(foldPlanMode(agent.session.events)).toBe(true)
+    expect(isPlanModeActive(agent.session)).toBe(true)
     expect(agent.steered).toHaveLength(1)
     const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
     expect(steerText?.type === 'text' && steerText.text).toContain('chose to keep planning')
@@ -503,7 +503,7 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     // …and the sidebar approve steers the localized execution kick-off.
     const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
     expect(res.status).toBe(200)
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
     expect(agent.steered).toHaveLength(1)
     const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
     expect(steerText?.type === 'text' && steerText.text).toContain('[计划审批]')
@@ -528,7 +528,7 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     // handoff), the mode is off, and the steer closes the planning session
     // without ordering execution here.
     expect(reviews.at(-1)?.review?.status).toBe('delegated')
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
     expect(agent.steered).toHaveLength(1)
     const steerText = agent.steered[0]?.content.find(part => part.type === 'text')
     expect(steerText?.type === 'text' && steerText.text).toContain('[计划审批]')
@@ -592,7 +592,7 @@ describe('sidebar review flow (delivery returns at once, the decision steers bac
     // The fresh decision lands.
     const res = await postDecision(harness, { session: sessionId, decision: 'approve' })
     expect(res.status).toBe(200)
-    expect(foldPlanMode(agent.session.events)).toBe(false)
+    expect(isPlanModeActive(agent.session)).toBe(false)
     expect(agent.steered).toHaveLength(1)
   })
 })

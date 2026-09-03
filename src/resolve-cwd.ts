@@ -22,9 +22,14 @@ export interface SessionCwdProbe {
   }
 }
 
-/** The session-persistence face this resolver consults (structural mirror). */
-export interface PersistenceInspect {
-  inspect(sessionId: string): Promise<{ meta: { cwd?: string } }>
+/**
+ * The session-persistence face this resolver consults (structural mirror).
+ * dsh 0.1.2-rc.1 rewrote the contract as handle-based snapshots: the old
+ * `inspect(id)` became `stat(id)` returning a `SessionPersistenceSnapshot`
+ * (the header lives under `snapshot.header`), or undefined when unknown.
+ */
+export interface PersistenceStat {
+  stat(sessionId: string): Promise<{ header: { cwd?: string } } | undefined>
 }
 
 /**
@@ -37,14 +42,14 @@ export interface PersistenceInspect {
 export async function resolveSessionCwd(
   session: SessionCwdProbe | undefined,
   sessionId: string,
-  persistence: PersistenceInspect | undefined,
+  persistence: PersistenceStat | undefined,
 ): Promise<string> {
   const headerCwd = session?.header?.cwd
   if (typeof headerCwd === 'string' && headerCwd !== '') return headerCwd
   if (persistence !== undefined) {
     try {
-      const inspected = await persistence.inspect(sessionId)
-      const metaCwd = inspected?.meta?.cwd
+      const snapshot = await persistence.stat(sessionId)
+      const metaCwd = snapshot?.header?.cwd
       if (typeof metaCwd === 'string' && metaCwd !== '' && isAbsolute(metaCwd)) return metaCwd
     } catch {
       // Persistence is a fallback source, not an authority: an inspect

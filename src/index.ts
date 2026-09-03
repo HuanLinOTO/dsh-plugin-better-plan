@@ -41,7 +41,8 @@
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { Session } from '@deepseek-ai/dsh-session'
-import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
+import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
+import { isPlanModeActive } from './plan-fold.ts'
 import type { Context } from './context.ts'
 import { resolveBetterPlanConfig, type BetterPlanConfig } from './config.ts'
 import { PlanDeliveryRegistry } from './delivery-registry.ts'
@@ -80,7 +81,7 @@ const pendingExits = new WeakSet<Session>()
 function flushPendingExit(agent: Agent): boolean {
   const session = agent.session
   if (!pendingExits.has(session)) return false
-  if (!foldPlanMode(session.events)) {
+  if (!isPlanModeActive(session)) {
     pendingExits.delete(session)
     return false
   }

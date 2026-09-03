@@ -3,30 +3,30 @@ import { resolveSessionCwd } from '../src/resolve-cwd.ts'
 
 describe('resolveSessionCwd', () => {
   it('prefers the live session header cwd', async () => {
-    const inspect = vi.fn()
+    const stat = vi.fn()
     const cwd = await resolveSessionCwd(
       { header: { cwd: '/repo' } },
       's1',
-      { inspect: inspect as never },
+      { stat: stat as never },
     )
     expect(cwd).toBe('/repo')
-    expect(inspect).not.toHaveBeenCalled()
+    expect(stat).not.toHaveBeenCalled()
   })
 
-  it('falls through an empty header cwd to the persistence index', async () => {
+  it('falls through an empty header cwd to the persistence snapshot', async () => {
     const cwd = await resolveSessionCwd(
       { header: { cwd: '' } },
       's1',
-      { inspect: () => Promise.resolve({ meta: { cwd: '/persisted' } }) },
+      { stat: () => Promise.resolve({ header: { cwd: '/persisted' } }) },
     )
     expect(cwd).toBe('/persisted')
   })
 
-  it('falls through a missing header to the persistence index', async () => {
+  it('falls through a missing header to the persistence snapshot', async () => {
     const cwd = await resolveSessionCwd(
       undefined,
       'cold-session',
-      { inspect: () => Promise.resolve({ meta: { cwd: '/cold' } }) },
+      { stat: () => Promise.resolve({ header: { cwd: '/cold' } }) },
     )
     expect(cwd).toBe('/cold')
   })
@@ -35,7 +35,7 @@ describe('resolveSessionCwd', () => {
     const cwd = await resolveSessionCwd(
       { header: {} },
       's1',
-      { inspect: () => Promise.reject(new Error('index gone')) },
+      { stat: () => Promise.reject(new Error('index gone')) },
     )
     expect(cwd).toBe(process.cwd())
   })
@@ -44,7 +44,16 @@ describe('resolveSessionCwd', () => {
     const cwd = await resolveSessionCwd(
       { header: {} },
       's1',
-      { inspect: () => Promise.resolve({ meta: { cwd: 'relative/path' } }) },
+      { stat: () => Promise.resolve({ header: { cwd: 'relative/path' } }) },
+    )
+    expect(cwd).toBe(process.cwd())
+  })
+
+  it('ignores an unknown session (undefined snapshot) and reaches the process cwd', async () => {
+    const cwd = await resolveSessionCwd(
+      { header: {} },
+      's1',
+      { stat: () => Promise.resolve(undefined) },
     )
     expect(cwd).toBe(process.cwd())
   })

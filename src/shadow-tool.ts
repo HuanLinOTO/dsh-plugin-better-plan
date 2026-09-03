@@ -35,7 +35,8 @@ import { isAbsolute, join } from 'node:path'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolDefinition } from '@deepseek-ai/dsh-tools'
-import { EXIT_PLAN_MODE, foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
+import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
+import { isPlanModeActive } from './plan-fold.ts'
 import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
 import type { BetterPlanConfig } from './config.ts'
 import type { Context } from './context.ts'
@@ -190,7 +191,7 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       if (agent === undefined) {
         throw new Error(`${EXIT_PLAN_MODE} requires a calling agent (no session to switch)`)
       }
-      if (!foldPlanMode(agent.session.events)) {
+      if (!isPlanModeActive(agent.session)) {
         throw new Error(`${EXIT_PLAN_MODE} is only available in plan mode`)
       }
       const sessionId = agent.session.id

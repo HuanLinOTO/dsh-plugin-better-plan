@@ -9,7 +9,7 @@
 `@deepseek-ai/*` 与 `dsh-better-sidebar` 不进 devDependencies（发布包干净）；开发/测试解析靠 `node_modules` junction 指向源码 checkout。`pnpm install` **之后**执行（pnpm 不清 Junction，但保持顺序更稳）：
 
 ```powershell
-$src = "$env:USERPROFILE\.dsh\source\current"
+$src = "D:\Projects\deepseek-harness\dsh"
 $nm  = "$PWD\node_modules"
 $links = @{
   '@deepseek-ai/cordis'             = "$src\vendor\cordis"

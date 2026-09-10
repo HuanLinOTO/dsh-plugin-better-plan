@@ -234,7 +234,7 @@ describe('shadow registration', () => {
     // plugin does not register any prompt section of its own.
     const harness = await setup()
     const agent = await agentWithSession(harness, 'no-section', { active: true })
-    const assembly = await harness.ctx.systemPrompt.assemble({ agent, scope: agent })
+    const assembly = await harness.ctx.systemPrompt.assemble({ scope: agent })
     expect(assembly.sections.find(section => section.name.startsWith('better-plan'))).toBeUndefined()
   })
 
@@ -248,7 +248,7 @@ describe('shadow registration', () => {
       order: 100,
       text: 'When ready, call exit_plan_mode with the complete plan markdown, starting with a # title. Make it the only and final tool call.',
     })
-    const assembly = await harness.ctx.systemPrompt.assemble({ agent, scope: agent })
+    const assembly = await harness.ctx.systemPrompt.assemble({ scope: agent })
     const section = assembly.sections.find(candidate => candidate.name === 'plan:policy')
     expect(section?.text).not.toContain(PLAN_DELIVERY_ANCHOR)
     expect(section?.text).toContain('Deliver the plan in the same turn you finish it')

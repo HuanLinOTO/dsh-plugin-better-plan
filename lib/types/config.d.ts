@@ -32,14 +32,14 @@ export interface BetterPlanConfig {
     locale: LocaleSetting;
 }
 /** Schemastery schema validated by the cordis Loader. */
-export declare const Config: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<Schemastery.ObjectS<{
-    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<string, string>;
-    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<number, number>;
-    locale: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
+export declare const Config: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<{
+    planDir: import("@deepseek-ai/schemastery").default<string, string>;
+    maxPlanBytes: import("@deepseek-ai/schemastery").default<number, number>;
+    locale: import("@deepseek-ai/schemastery").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
 }>, Schemastery.ObjectT<{
-    planDir: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<string, string>;
-    maxPlanBytes: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<number, number>;
-    locale: import("C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
+    planDir: import("@deepseek-ai/schemastery").default<string, string>;
+    maxPlanBytes: import("@deepseek-ai/schemastery").default<number, number>;
+    locale: import("@deepseek-ai/schemastery").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
 }>>;
 /**
  * Resolve a raw config patch through the schema, returning a full

@@ -16,28 +16,29 @@
     "noEmit": true,
     "types": ["node"],
     "typeRoots": [
-      "C:/Users/Administrator/.dsh/source/current/node_modules/@types",
-      "C:/Users/Administrator/.dsh/source/current/scripts/types"
+      "node_modules/@types",
+      "D:/Projects/deepseek-harness/dsh/node_modules/@types",
+      "D:/Projects/deepseek-harness/dsh/scripts/types"
     ],
     "paths": {
-      "@deepseek-ai/cordis": ["C:/Users/Administrator/.dsh/source/current/vendor/cordis/lib/types/index.d.ts"],
-      "@deepseek-ai/cosmokit": ["C:/Users/Administrator/.dsh/source/current/vendor/cosmokit/lib/types/index.d.ts"],
-      "@deepseek-ai/schemastery": ["C:/Users/Administrator/.dsh/source/current/vendor/schemastery/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-llm": ["C:/Users/Administrator/.dsh/source/current/packages/llm/llm/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-session": ["C:/Users/Administrator/.dsh/source/current/packages/core/session/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-session/types": ["C:/Users/Administrator/.dsh/source/current/packages/core/session/lib/types/types.d.ts"],
-      "@deepseek-ai/dsh-agent": ["C:/Users/Administrator/.dsh/source/current/packages/core/agent/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-scope": ["C:/Users/Administrator/.dsh/source/current/packages/core/scope/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-system-prompt": ["C:/Users/Administrator/.dsh/source/current/packages/core/system-prompt/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-tools": ["C:/Users/Administrator/.dsh/source/current/packages/core/tools/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-plan-mode": ["C:/Users/Administrator/.dsh/source/current/packages/plan/plan-mode/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-user-questions": ["C:/Users/Administrator/.dsh/source/current/packages/interaction/user-questions/lib/types/index.d.ts"],
-      "@deepseek-ai/dsh-client-locale/client": ["C:/Users/Administrator/.dsh/source/current/packages/client/locale/lib/types/client/index.d.ts"],
+      "@deepseek-ai/cordis": ["D:/Projects/deepseek-harness/dsh/vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/cosmokit": ["D:/Projects/deepseek-harness/dsh/vendor/cosmokit/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["D:/Projects/deepseek-harness/dsh/vendor/schemastery/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-llm": ["D:/Projects/deepseek-harness/dsh/packages/llm/llm/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session": ["D:/Projects/deepseek-harness/dsh/packages/core/session/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session/types": ["D:/Projects/deepseek-harness/dsh/packages/core/session/lib/types/types.d.ts"],
+      "@deepseek-ai/dsh-agent": ["D:/Projects/deepseek-harness/dsh/packages/core/agent/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-scope": ["D:/Projects/deepseek-harness/dsh/packages/core/scope/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-system-prompt": ["D:/Projects/deepseek-harness/dsh/packages/core/system-prompt/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-tools": ["D:/Projects/deepseek-harness/dsh/packages/core/tools/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-plan-mode": ["D:/Projects/deepseek-harness/dsh/packages/plan/plan-mode/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-questions": ["D:/Projects/deepseek-harness/dsh/packages/interaction/user-questions/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["D:/Projects/deepseek-harness/dsh/packages/client/locale/lib/types/client/index.d.ts"],
       "dsh-better-sidebar": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/index.d.ts"],
       "dsh-better-sidebar/client": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/client/index.d.ts"],
       "dsh-better-sidebar/client/service": ["D:/Projects/deepseek-harness/DSH-better-sidebar/lib/types/client/service.d.ts"],
-      "react": ["C:/Users/Administrator/.dsh/source/current/node_modules/@types/react/index.d.ts"],
-      "react/jsx-runtime": ["C:/Users/Administrator/.dsh/source/current/node_modules/@types/react/jsx-runtime.d.ts"]
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"]
     }
   },
   "include": ["src", "tests", "tsdown.config.ts", "vitest.config.ts"]

@@ -11,14 +11,14 @@
 ## 功能
 
 - **文件先行**：内置 `exit_plan_mode` 的参数是完整计划正文；本插件以**同名工具逐 agent 遮蔽替换**（`agent/session-start` → `agent.ctx.tools.register`，跨 scope 层遮蔽 preset 挂载的原版），新契约只有一个 `path` 参数——模型先用 `write` 工具把完整计划写成 markdown，再传路径。
-- **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。
+- **侧边栏展示**：工具读取计划文件，经自有 `/better-plan/ws/delivery` WebSocket 推送到会话的 Plan tab（`order: 15`，single 单实例）；正文用 DSH `MarkdownText` 渲染（双代 chrome labels prop 通吃 0.1.1-rc.x / 0.1.2-alpha.1+）。推送 seed 不带 `path`——计划路径只放 `meta.path`（better-sidebar v0.19+ 原生右栏把带 `path` 的 openTab 一律按文件资源打开、由 editor 类型认领，Plan tab 会因此根本不出现；组件 tab 携带路径必须走 meta）。
 - **侧边栏审批（送达时无聊天弹窗、对话直接停止）**：推送送达已连接的侧边栏视图后，工具**立即返回**「计划已呈现，请结束回合」——模型收尾结束对话，聊天里既没有审批卡也没有挂起的调用卡片。用户在 Plan 面板的动作栏审阅全文后点 **Approve** / **新开对话执行** / **Keep planning**（可附反馈文本），决定经 `POST /better-plan/api/review` 回到宿主端：批准 → 立即落 `plan/mode: false` 并以 `agent.steer` 开启新回合让模型开始执行；保留 → 反馈经 steer 开新回合回给模型修改。审批语义与模式切换语义与原版一致。
 - **新开对话执行（delegation）**：第三个决定 `approve_new_session` 结算为 `delegated`——规划会话照常退出计划模式，但 steer 文案改为「计划移交新对话执行，本会话收尾即可」；同时面板经 DSH 公开 `ctx.sessions` 契约在**同一工作目录**新建空白会话，把 kickoff（指向计划文件的绝对路径 + 执行指令）作为首条用户消息排队发出并导航过去。新对话与用户手点「新建会话」完全同构（默认 preset），失败时状态行下就地报错、计划路径仍在面板可见，可手动重试。`ctx.sessions` 服务缺席时按钮不渲染；无侧边栏的聊天弹窗降级路径保持原版两选项。
 - **提示词面对齐**：preset 的 `plan:policy` 提示段仍是原版措辞（内联传正文 + 禁止写文件，且宣称压过工具描述），与本插件的工具契约直接冲突。本插件注册 `system-prompt/assemble` waterfall 监听器（逐 agent，挂在 agent scope 上——assemble 派发 key 就是 agent），把该段四处原版契约句子就地改写为文件先行契约：交付句改写为**同回合两步强制交付**（先写 `docs/plans/YYYY-MM-DD-<topic>.md`——日期 + 主题短横线命名，再立即调 `exit_plan_mode`）；原版「exit_plan_mode 是该回合唯一且最后的工具调用」句同步改写（否则模型把已发生的 write 视作违反该句，写完文件就停）；写禁句与规则压治句各带豁免。锚点句子只在计划模式激活时出现，无需自管状态。
 - **无侧边栏降级**：推送未送达（better-sidebar 未安装或面板视图未连接）时，回退为**原版阻塞审批卡**——`userQuestions.ask` + `plan-review` 意图在聊天里渲染（detail 是完整计划全文），批准后原样在回合内继续。
 - **审批状态双通道**：WS `review` 帧实时广播（多窗口同步、attach 回放恢复刷新）；Plan 面板挂载时再经 `GET /better-plan/api/review` 引导拉取一次（防丢帧；store 已有活动状态时让位，不会误清）。
 - **i18n（跟随 DSH 语言，zh/en）**：面向用户的文案双语——侧边栏 Plan 面板与 tab 标题注册进 DSH 共享 locale 注册表（命名空间 `betterPlan`），跟随 Host-backed 语言偏好实时切换；宿主端文案（交付结果的 render 文本、steer 消息、无侧边栏审批弹窗）按会话解析 locale——config `locale` 覆盖 → 连接视图上报的 locale（WS connect 查询参数 + 审批请求携带浏览器当前 DSH 语言）→ 英文。**模型契约文本保持英文**（工具 description、`plan:policy` 改写、execute 错误指引）。审批路由的错误响应带稳定 `code`，面板按 code 映射本地化文案，未知 code 回退原文。
-- **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件。
+- **刷新可恢复**：计划路径随 tab `meta` 进 better-sidebar 的 localStorage 持久化，刷新后 Plan 面板按 `meta.path` 重读文件；重复交付（同一约定文件名改写后再推）由新审批 id 触发 PlanView 重读。
 
 ## 开发
 
@@ -89,7 +89,7 @@ dsh plugin --profile web add "link:D:/Projects/deepseek-harness/dsh-plugin-bette
 dsh plugin --profile web add "github:huanlinoto/dsh-plugin-better-plan"
 ```
 
-安装后重启 `dsh web`，浏览器硬刷新（`Ctrl+Shift+R`）。前置：profile 内安装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（v0.12.0+；未安装时插件照常工作，走全文降级路径）。
+安装后重启 `dsh web`，浏览器硬刷新（`Ctrl+Shift+R`）。前置：profile 内安装 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（v0.12.0+；v0.19.0 原生右栏起交付推送必须为本修复之后的版本——seed 带 `path` 会被打开成文件编辑器，见 `docs/plans/2026-09-11-native-openTab-path-seed-design.md`；未安装时插件照常工作，走全文降级路径）。
 
 ### 配置（cordis.patch.yml 插件行 config）
 

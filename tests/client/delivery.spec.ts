@@ -15,14 +15,13 @@ function fakeService(features?: readonly string[]) {
 }
 
 describe('applyDeliveryPush (WS push → tab open/update/activate sequence)', () => {
-  it('opens the single Plan tab with the path seed and meta, then updates and activates (v0.12+ service)', () => {
+  it('opens the single Plan tab with the meta-carried path (no path seed), then updates and activates (v0.12+ service)', () => {
     const service = fakeService(['updateTab', 'openFile'])
     applyDeliveryPush(service as never, { id: 'd1', path: '/repo/docs/plans/p.md', title: 'The plan' }, 's1')
     expect(service.openTab).toHaveBeenCalledExactlyOnceWith(
       {
         type: TAB_ID,
         id: TAB_ID,
-        path: '/repo/docs/plans/p.md',
         title: 'The plan',
         meta: { path: '/repo/docs/plans/p.md', deliveredAt: expect.any(Number) },
       },
@@ -32,7 +31,6 @@ describe('applyDeliveryPush (WS push → tab open/update/activate sequence)', ()
       TAB_ID,
       {
         title: 'The plan',
-        path: '/repo/docs/plans/p.md',
         meta: { path: '/repo/docs/plans/p.md', deliveredAt: expect.any(Number) },
       },
     )
@@ -50,13 +48,21 @@ describe('applyDeliveryPush (WS push → tab open/update/activate sequence)', ()
     const service = fakeService(['updateTab'])
     applyDeliveryPush(service as never, { path: '/p.md' }, 's1')
     expect(service.openTab).toHaveBeenCalledExactlyOnceWith(
-      { type: TAB_ID, id: TAB_ID, path: '/p.md', title: undefined, meta: { path: '/p.md', deliveredAt: expect.any(Number) } },
+      { type: TAB_ID, id: TAB_ID, title: undefined, meta: { path: '/p.md', deliveredAt: expect.any(Number) } },
       { sessionId: 's1' },
     )
     expect(service.updateTab).toHaveBeenCalledExactlyOnceWith(
       TAB_ID,
-      { path: '/p.md', meta: { path: '/p.md', deliveredAt: expect.any(Number) } },
+      { meta: { path: '/p.md', deliveredAt: expect.any(Number) } },
     )
+  })
+
+  it('never seeds path on the open (the native surface would route it to the file editor)', () => {
+    const service = fakeService(['updateTab'])
+    applyDeliveryPush(service as never, { path: '/p.md', title: 'T' }, 's1')
+    const [seed] = (service.openTab as ReturnType<typeof vi.fn>).mock.calls[0] as [Record<string, unknown>]
+    expect(Object.hasOwn(seed, 'path')).toBe(false)
+    expect((seed.meta as { path?: string }).path).toBe('/p.md')
   })
 
   it('ignores malformed pushes', () => {

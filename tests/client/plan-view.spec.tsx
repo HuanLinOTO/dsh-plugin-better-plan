@@ -112,6 +112,25 @@ describe('PlanView', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3) // bootstrap + read + retry read
   })
 
+  it('re-reads the plan file when a new review id arrives (a re-delivery rewrites the same file)', async () => {
+    const fetchMock = stubUrlFetch([
+      { ok: true, value: { kind: 'text', content: '# Draft', truncated: false } },
+      { ok: true, value: { kind: 'text', content: '# Revised', truncated: false } },
+    ])
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    render(createElement(PlanView, tabProps()))
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown').textContent).toBe('# Draft')
+    })
+    // The model revised the same conventional file and re-delivered: a new
+    // pending review id is the only signal a mounted native tab gets.
+    reviewStore.set({ id: 'r2', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    await waitFor(() => {
+      expect(screen.getByTestId('markdown').textContent).toBe('# Revised')
+    })
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith(REVIEW_API_PATH))).toHaveLength(1)
+  })
+
   it('flags a binary read result as a review-in-editor case', async () => {
     vi.mocked(fetch).mockResolvedValue(fetchResponse({ ok: true, value: { kind: 'binary', size: 10, truncated: false, head: '' } }) as never)
     render(createElement(PlanView, tabProps()))

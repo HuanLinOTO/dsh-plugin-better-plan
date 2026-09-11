@@ -188,7 +188,10 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
         setLoad({ status: 'error', message: cause instanceof Error ? cause.message : String(cause) })
       })
     return () => { controller.abort() }
-  }, [path, scope.sessionId, attempt])
+    // A re-delivery rewrites the same conventional filename; the native page
+    // dedupe never refreshes a mounted record's meta, so a new review id is
+    // the re-read trigger.
+  }, [path, scope.sessionId, attempt, review?.id])
 
   const betterSidebar = ctx.get('betterSidebar')
   const canOpenInEditor = path !== undefined

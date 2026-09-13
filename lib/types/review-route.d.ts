@@ -8,8 +8,8 @@
  * pending review through the {@link PlanReviewGate} and echoes the settled
  * state back so the submitting view (and, over the delivery WebSocket,
  * every other view) reflects the decision. `approve_new_session` settles
- * as `delegated`: the planning session is closed out with a handoff steer
- * and the panel itself launches the execution conversation.
+ * as `delegated`: the planning session closes out silently (no message is
+ * injected there) and the panel itself launches the execution conversation.
  *
  * The same browser-trust fence as the delivery WebSocket guards the route:
  * this is a DNS-rebinding / cross-site defense for a session-scoped command,

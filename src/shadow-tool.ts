@@ -42,7 +42,7 @@ import type { BetterPlanConfig } from './config.ts'
 import type { Context } from './context.ts'
 import type { PlanDeliveryRegistry } from './delivery-registry.ts'
 import {
-  approvalSteerText, delegatedSteerText, keepPlanningSteerText, localizedRenderContent, planReviewCopy,
+  approvalSteerText, keepPlanningSteerText, localizedRenderContent, planReviewCopy,
   type PlanLocale,
 } from './locale.ts'
 import type { PlanReviewGate } from './review-gate.ts'
@@ -256,11 +256,11 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
             steerDecision(keepPlanningSteerText(feedback, deps.localeOf(sessionId)))
           },
           // Approve-and-delegate: execution runs in a NEW conversation the
-          // plan panel launches (through the client sessions service); this
-          // session is closed out instead of steered into execution.
+          // plan panel launches (through the client sessions service). This
+          // session closes out SILENTLY — no message is injected and no new
+          // turn starts here; the plan-mode flip is the only visible change.
           onDelegate: () => {
             exitPlanMode()
-            steerDecision(delegatedSteerText(deps.localeOf(sessionId)))
           },
         })
         return { delivered: true as const, decision: 'pending' as const }

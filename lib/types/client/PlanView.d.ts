@@ -14,8 +14,8 @@
  * While a review is pending the bar offers Approve / Execute in new chat /
  * Keep planning; a decision POSTs to the host's review route and the echo
  * updates the store. The delegation choice then launches the execution
- * conversation through the sessions service (see execution-launch.ts) and
- * navigates there.
+ * conversation through the sessions service into the planning session's
+ * workspace (see execution-launch.ts) and navigates there.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/PlanView
  */

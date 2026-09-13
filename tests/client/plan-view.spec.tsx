@@ -263,14 +263,14 @@ describe('PlanView delegation (execute in a new conversation)', () => {
   /** A structural sessions-service stub capturing the delegation calls. */
   function sessionsStub(failure?: Error) {
     const calls = {
-      created: [] as Array<{ cwd?: string } | undefined>,
+      created: [] as Array<{ workspaceId?: string; cwd?: string } | undefined>,
       prompts: [] as Array<{ text: string; mode: string }>,
       opened: [] as string[],
     }
     const sessions = {
       create: failure === undefined
-        ? vi.fn(async (opts?: { cwd?: string }) => { calls.created.push(opts); return 's2' })
-        : vi.fn(async (opts?: { cwd?: string }) => { calls.created.push(opts); throw failure }),
+        ? vi.fn(async (opts?: { workspaceId?: string; cwd?: string }) => { calls.created.push(opts); return 's2' })
+        : vi.fn(async (opts?: { workspaceId?: string; cwd?: string }) => { calls.created.push(opts); throw failure }),
       open: vi.fn((id: string) => { calls.opened.push(id) }),
       list: { getSnapshot: () => ({ byId: { s1: { cwd: '/from-list' } } }) },
       binding: vi.fn(() => ({
@@ -285,18 +285,66 @@ describe('PlanView delegation (execute in a new conversation)', () => {
     return { sessions, calls }
   }
 
-  /** tabProps with the sessions service reachable through ctx.get. */
-  function propsWithSessions(sessions: unknown): TabComponentProps {
+  /** A structural workspaces-service stub (rows carrying accounted sessions). */
+  function workspacesStub(items: Array<{ workspaceId: string; sessionIds: string[] }>) {
+    return { list: { getSnapshot: () => ({ items }) } }
+  }
+
+  /** tabProps with the sessions (and optional workspaces) services reachable through ctx.get. */
+  function propsWithSessions(sessions: unknown, workspaces?: unknown): TabComponentProps {
     return tabProps({
       ctx: {
         get: (name: string) => (name === 'betterSidebar'
           ? { features: ['updateTab', 'openFile'], openFile: vi.fn() }
-          : name === 'sessions' ? sessions : undefined),
+          : name === 'sessions' ? sessions
+          : name === 'workspaces' ? workspaces
+          : undefined),
       } as unknown as TabComponentProps['ctx'],
     })
   }
 
-  it('settles delegated, queues the kickoff into a fresh session, and navigates there', async () => {
+  it('settles delegated, creates in the planning workspace, queues the kickoff, and navigates there', async () => {
+    const { sessions, calls } = sessionsStub()
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithSessions(sessions, workspacesStub([
+      { workspaceId: 'ws-other', sessionIds: ['s0'] },
+      { workspaceId: 'ws-1', sessionIds: ['s1', 's9'] },
+    ]))))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    await screen.findByText('Plan approved — execution continues in a new conversation.')
+    // The decision POST carried the third decision value (no feedback field).
+    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
+    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve_new_session', locale: 'en', id: 'r1' })
+    // The new conversation joins the planning session's workspace group (a
+    // cwd-only create would attach no workspace — the ungrouped-session
+    // regression): workspaceId only, no cwd, kickoff anchored on the plan
+    // path, then navigation.
+    expect(calls.created).toEqual([{ workspaceId: 'ws-1' }])
+    expect(calls.prompts).toHaveLength(1)
+    expect(calls.prompts[0]?.mode).toBe('queue')
+    expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
+    expect(calls.prompts[0]?.text).toContain('[Plan execution]')
+    expect(calls.opened).toEqual(['s2'])
+    expect(reviewStore.get()?.status).toBe('delegated')
+  })
+
+  it('falls back to the planning session cwd when it belongs to no workspace', async () => {
+    const { sessions, calls } = sessionsStub()
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithSessions(sessions, workspacesStub([
+      { workspaceId: 'ws-1', sessionIds: ['s0'] },
+    ]))))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    await screen.findByText('Plan approved — execution continues in a new conversation.')
+    expect(calls.created).toEqual([{ cwd: '/from-list' }])
+    expect(calls.opened).toEqual(['s2'])
+  })
+
+  it('falls back to the cwd without a workspaces service too', async () => {
     const { sessions, calls } = sessionsStub()
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
     stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
@@ -304,18 +352,8 @@ describe('PlanView delegation (execute in a new conversation)', () => {
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Execute in new chat'))
     await screen.findByText('Plan approved — execution continues in a new conversation.')
-    // The decision POST carried the third decision value (no feedback field).
-    const [, init] = vi.mocked(fetch).mock.calls.find(([url]) => url === REVIEW_API_PATH) as [string, RequestInit]
-    expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve_new_session', locale: 'en', id: 'r1' })
-    // The new conversation: same cwd as the planning session (from the list
-    // summary), kickoff anchored on the plan path, then navigation.
     expect(calls.created).toEqual([{ cwd: '/from-list' }])
-    expect(calls.prompts).toHaveLength(1)
-    expect(calls.prompts[0]?.mode).toBe('queue')
-    expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
-    expect(calls.prompts[0]?.text).toContain('[Plan execution]')
     expect(calls.opened).toEqual(['s2'])
-    expect(reviewStore.get()?.status).toBe('delegated')
   })
 
   it('surfaces a launch failure under the delegated status line', async () => {

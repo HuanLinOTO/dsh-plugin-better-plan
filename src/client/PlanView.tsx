@@ -14,8 +14,8 @@
  * While a review is pending the bar offers Approve / Execute in new chat /
  * Keep planning; a decision POSTs to the host's review route and the echo
  * updates the store. The delegation choice then launches the execution
- * conversation through the sessions service (see execution-launch.ts) and
- * navigates there.
+ * conversation through the sessions service into the planning session's
+ * workspace (see execution-launch.ts) and navigates there.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/PlanView
  */
@@ -26,7 +26,11 @@ import { MarkdownText, writeClipboard } from '@deepseek-ai/dsh-client-ui-primiti
 import type { TabComponentProps } from 'dsh-better-sidebar/client/service'
 import { t } from './locales.ts'
 import { markdownTextProps } from './markdown-props.ts'
-import { launchExecutionConversation, type SessionsServiceFace } from './execution-launch.ts'
+import {
+  launchExecutionConversation,
+  type SessionsServiceFace,
+  type WorkspacesServiceFace,
+} from './execution-launch.ts'
 import { fetchReviewState, reviewStore, submitReviewDecision } from './review-store.ts'
 
 /** The meta payload the delivery flow stores on the tab. */
@@ -154,8 +158,11 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
   const [delegateError, setDelegateError] = useState<string | undefined>(undefined)
   // The delegation flow needs the sessions service (a fresh conversation is
   // a first-class session, not a plugin-owned thread); absent service → the
-  // third button simply does not render.
+  // third button simply does not render. The workspaces service is optional
+  // in the other direction: present → the new conversation joins the planning
+  // session's workspace group; absent → the cwd fallback.
   const sessions = ctx.get('sessions') as SessionsServiceFace | undefined
+  const workspaces = ctx.get('workspaces') as WorkspacesServiceFace | undefined
   const pendingReview = review !== null && review.status === 'pending' && review.path === path ? review : null
   const settledReview = review !== null && review.path === path && review.status !== 'pending'
     ? settledReviewText(review.status, delegating)
@@ -221,14 +228,14 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
         // surface under it — the plan path stays visible for a manual retry.
         if (sessions === undefined) return
         setDelegating(true)
-        launchExecutionConversation(sessions, pendingReview.path, scope.sessionId)
+        launchExecutionConversation(sessions, workspaces, pendingReview.path, scope.sessionId)
           .catch((cause: unknown) => {
             setDelegateError(`${t('errDelegateFailed')}: ${cause instanceof Error ? cause.message : String(cause)}`)
           })
           .finally(() => { setDelegating(false) })
       })
       .finally(() => { setSubmitting(false) })
-  }, [pendingReview, scope.sessionId, feedback, sessions])
+  }, [pendingReview, scope.sessionId, feedback, sessions, workspaces])
 
   return createElement('div', { style: styles.root },
     createElement('div', { style: styles.header },

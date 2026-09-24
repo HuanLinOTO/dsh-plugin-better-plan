@@ -6,8 +6,8 @@
  * approach: DSH's own packages already augment `@deepseek-ai/cordis`, and
  * restating members structurally avoids TS2717 merge conflicts with any
  * other plugin's augmentation. The augmentations that DO reach this program
- * through workspace types (the typed `agent/session-start` /
- * `agent/pre-step` events from `@deepseek-ai/dsh-agent`) stay untouched.
+ * through workspace types (the typed `agent/created` / `agent/pre-step` events
+ * from `@deepseek-ai/dsh-agent`) stay untouched.
  *
  * @module @huanlin/dsh-plugin-better-plan/context
  */

@@ -148,8 +148,7 @@ async function agentWithSession(
   ;(agent as { ctx?: Context }).ctx = scoped
   if (active !== undefined) session.append('plan/mode', { active })
   harness.ctx.agents.enter(agent, undefined)
-  harness.ctx.agents.announce(agent)
-  agentEvents(harness.ctx, agent).emit('agent/session-start', { source: 'startup' })
+  await harness.ctx.agents.announce(agent, 'startup')
   return agent
 }
 

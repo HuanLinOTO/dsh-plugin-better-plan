@@ -5,7 +5,7 @@
  * The model writes the complete plan to a markdown file (guided by the tool
  * description) and calls the same-name `exit_plan_mode` with its path. This
  * plugin registers that same-name tool into EVERY agent's scope at
- * `agent/session-start` (`agent.ctx.tools.register`) — per-agent scoped
+ * `agent/created` (`agent.ctx.tools.register`) — per-agent scoped
  * registrations shadow the preset-mounted built-in across scope layers, so
  * the built-in plan-mode plugin stays mounted and untouched (its `plan:policy`
  * section, `/plan` command, projection, and composer badge keep working).

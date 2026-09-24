@@ -3,7 +3,7 @@
 # The `name` is the package entry; the Loader resolves it from profile node_modules.
 #
 # The plugin SHADOWS the built-in `exit_plan_mode` per agent (same tool name,
-# per-agent scoped registration via `agent/session-start` → `agent.ctx`), so the
+# per-agent scoped registration via `agent/created` → `agent.ctx`), so the
 # built-in plan-mode row in every agent preset stays mounted and untouched — its
 # `plan:policy` section, `/plan` command, projection and composer badge keep
 # working; only the delivery tool is replaced.

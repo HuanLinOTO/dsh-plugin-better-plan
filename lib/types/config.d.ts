@@ -8,6 +8,7 @@
  *
  * @module @huanlin/dsh-plugin-better-plan/config
  */
+import z from '@deepseek-ai/schemastery';
 import type { LocaleSetting } from './locale.ts';
 /** Deployment-tunable configuration for the better-plan plugin. */
 export interface BetterPlanConfig {
@@ -32,15 +33,15 @@ export interface BetterPlanConfig {
     locale: LocaleSetting;
 }
 /** Schemastery schema validated by the cordis Loader. */
-export declare const Config: import("@deepseek-ai/schemastery").default<Schemastery.ObjectS<{
-    planDir: import("@deepseek-ai/schemastery").default<string, string>;
-    maxPlanBytes: import("@deepseek-ai/schemastery").default<number, number>;
-    locale: import("@deepseek-ai/schemastery").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
-}>, Schemastery.ObjectT<{
-    planDir: import("@deepseek-ai/schemastery").default<string, string>;
-    maxPlanBytes: import("@deepseek-ai/schemastery").default<number, number>;
-    locale: import("@deepseek-ai/schemastery").default<"zh" | "en" | "auto", "zh" | "en" | "auto">;
-}>>;
+export declare const Config: z<Schemastery.ObjectS<NoInfer<{
+    planDir: z<string, string, "defined">;
+    maxPlanBytes: z<number, number, "defined">;
+    locale: z<"zh" | "en" | "auto", "zh" | "en" | "auto", "defined">;
+}>>, Schemastery.ObjectT<NoInfer<{
+    planDir: z<string, string, "defined">;
+    maxPlanBytes: z<number, number, "defined">;
+    locale: z<"zh" | "en" | "auto", "zh" | "en" | "auto", "defined">;
+}>>, "plain">;
 /**
  * Resolve a raw config patch through the schema, returning a full
  * {@link BetterPlanConfig} with defaults applied. Unknown keys are rejected

@@ -9,7 +9,7 @@
  * @module @huanlin/dsh-plugin-better-plan/config
  */
 
-import z from 'schemastery'
+import z from '@deepseek-ai/schemastery'
 import type { LocaleSetting } from './locale.ts'
 
 /** Deployment-tunable configuration for the better-plan plugin. */

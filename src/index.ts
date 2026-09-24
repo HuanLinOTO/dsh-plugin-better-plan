@@ -5,7 +5,7 @@
  * The model writes the complete plan to a markdown file (guided by the tool
  * description) and calls the same-name `exit_plan_mode` with its path. This
  * plugin registers that same-name tool into EVERY agent's scope at
- * `agent/session-start` (`agent.ctx.tools.register`) — per-agent scoped
+ * `agent/created` (`agent.ctx.tools.register`) — per-agent scoped
  * registrations shadow the preset-mounted built-in across scope layers, so
  * the built-in plan-mode plugin stays mounted and untouched (its `plan:policy`
  * section, `/plan` command, projection, and composer badge keep working).
@@ -105,11 +105,16 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
 
   // Register the shadowed delivery tool in every agent's scope. The effect
   // lives on the agent's own fiber: agent disposal unwinds it, and the
-  // session-start contract (once per agent) keeps registration idempotent —
-  // the per-agent set below is the defensive catalog check (a scope-layer
-  // lookup would also see the preset-mounted original and skip forever).
+  // agent/created contract (once per agent creation) keeps registration
+  // idempotent — the per-agent set below is the defensive catalog check (a
+  // scope-layer lookup would also see the preset-mounted original and skip
+  // forever). Since DSH 0.1.7 (DSH-0.1.7-RC1-07) `agent/session-start` is gone:
+  // creation is announced as `agent/created` with a `source`
+  // ('startup' | 'resume' | 'clear' | 'compact'); this listener only needs the
+  // agent, and its serial dispatch fails creation on a throw, so it stays
+  // synchronous and non-re-entrant.
   const shadowed = new WeakSet<object>()
-  ctx.on('agent/session-start', ({ agent }: { agent: Agent }) => {
+  ctx.on('agent/created', ({ agent }: { agent: Agent }): undefined => {
     if (shadowed.has(agent)) return
     shadowed.add(agent)
     agent.ctx.effect(

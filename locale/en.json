@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Better Plan",
+    "description": "Replaces the built-in plan mode's plan delivery: plans are written to a markdown file first, shown in the better-sidebar Plan panel, and approved there — chat stays clean with no popup card."
+  }
+}

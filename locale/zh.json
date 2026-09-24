@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "计划模式增强",
+    "description": "取代内置 plan mode 的计划交付：计划先写成 markdown 文件，经 better-sidebar 的「计划」面板展示并在侧边栏完成审批，聊天里不再弹出审批卡。"
+  }
+}

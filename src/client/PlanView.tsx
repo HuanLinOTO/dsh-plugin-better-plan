@@ -29,6 +29,7 @@ import { markdownTextProps } from './markdown-props.ts'
 import {
   launchExecutionConversation,
   type SessionsServiceFace,
+  type UiWorkspaceFace,
   type WorkspacesServiceFace,
 } from './execution-launch.ts'
 import { fetchReviewState, reviewStore, submitReviewDecision } from './review-store.ts'
@@ -160,9 +161,12 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
   // a first-class session, not a plugin-owned thread); absent service → the
   // third button simply does not render. The workspaces service is optional
   // in the other direction: present → the new conversation joins the planning
-  // session's workspace group; absent → the cwd fallback.
+  // session's workspace group; absent → the cwd fallback. So is uiWorkspace:
+  // present → the new conversation is selected as the main view; absent →
+  // the kickoff is still queued and the conversation waits in the sidebar.
   const sessions = ctx.get('sessions') as SessionsServiceFace | undefined
   const workspaces = ctx.get('workspaces') as WorkspacesServiceFace | undefined
+  const uiWorkspace = ctx.get('uiWorkspace') as UiWorkspaceFace | undefined
   const pendingReview = review !== null && review.status === 'pending' && review.path === path ? review : null
   const settledReview = review !== null && review.path === path && review.status !== 'pending'
     ? settledReviewText(review.status, delegating)
@@ -228,14 +232,14 @@ export function PlanView(props: TabComponentProps): ReturnType<typeof createElem
         // surface under it — the plan path stays visible for a manual retry.
         if (sessions === undefined) return
         setDelegating(true)
-        launchExecutionConversation(sessions, workspaces, pendingReview.path, scope.sessionId)
+        launchExecutionConversation(sessions, workspaces, uiWorkspace, pendingReview.path, scope.sessionId)
           .catch((cause: unknown) => {
             setDelegateError(`${t('errDelegateFailed')}: ${cause instanceof Error ? cause.message : String(cause)}`)
           })
           .finally(() => { setDelegating(false) })
       })
       .finally(() => { setSubmitting(false) })
-  }, [pendingReview, scope.sessionId, feedback, sessions, workspaces])
+  }, [pendingReview, scope.sessionId, feedback, sessions, workspaces, uiWorkspace])
 
   return createElement('div', { style: styles.root },
     createElement('div', { style: styles.header },

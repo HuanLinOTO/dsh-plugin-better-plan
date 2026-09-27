@@ -261,26 +261,34 @@ describe('PlanView review action bar (the sidebar approval surface)', () => {
 
 describe('PlanView delegation (execute in a new conversation)', () => {
   /** A structural sessions-service stub capturing the delegation calls. */
-  function sessionsStub(failure?: Error) {
+  function sessionsStub(failure?: Error, openState: string = 'open') {
     const calls = {
       created: [] as Array<{ workspaceId?: string; cwd?: string } | undefined>,
+      using: [] as Array<{ id: string; source: string }>,
       prompts: [] as Array<{ text: string; mode: string }>,
-      opened: [] as string[],
     }
+    const prompt = vi.fn(async (content: { type: 'text'; text: string }[], mode: string) => {
+      calls.prompts.push({ text: content[0]?.text ?? '', mode })
+      return { ok: true }
+    })
     const sessions = {
       create: failure === undefined
         ? vi.fn(async (opts?: { workspaceId?: string; cwd?: string }) => { calls.created.push(opts); return 's2' })
         : vi.fn(async (opts?: { workspaceId?: string; cwd?: string }) => { calls.created.push(opts); throw failure }),
-      open: vi.fn((id: string) => { calls.opened.push(id) }),
+      // The production `using` retains the session, awaits its initial open,
+      // and releases after the operation settles; the stub keeps that shape.
+      using: vi.fn(async (
+        id: string,
+        options: { source: string },
+        operation: (reference: unknown) => unknown,
+      ) => {
+        calls.using.push({ id, source: options.source })
+        return await operation({
+          sessionId: id,
+          binding: { session: { getSnapshot: () => ({ openState, openError: null }), prompt } },
+        })
+      }),
       list: { getSnapshot: () => ({ byId: { s1: { cwd: '/from-list' } } }) },
-      binding: vi.fn(() => ({
-        session: {
-          prompt: vi.fn(async (content: { type: 'text'; text: string }[], mode: string) => {
-            calls.prompts.push({ text: content[0]?.text ?? '', mode })
-            return { ok: true }
-          }),
-        },
-      })),
     }
     return { sessions, calls }
   }
@@ -290,14 +298,28 @@ describe('PlanView delegation (execute in a new conversation)', () => {
     return { list: { getSnapshot: () => ({ items }) } }
   }
 
-  /** tabProps with the sessions (and optional workspaces) services reachable through ctx.get. */
-  function propsWithSessions(sessions: unknown, workspaces?: unknown): TabComponentProps {
+  /** A structural uiWorkspace stub capturing openSession navigations. */
+  function uiWorkspaceStub(): { uiWorkspace: object; navigations: string[] } {
+    const navigations: string[] = []
+    return {
+      uiWorkspace: { openSession: vi.fn((id: string) => { navigations.push(id) }) },
+      navigations,
+    }
+  }
+
+  /** tabProps with the sessions/workspaces/uiWorkspace services reachable through ctx.get. */
+  function propsWithServices(
+    sessions: unknown,
+    workspaces?: unknown,
+    uiWorkspace?: unknown,
+  ): TabComponentProps {
     return tabProps({
       ctx: {
         get: (name: string) => (name === 'betterSidebar'
           ? { features: ['updateTab', 'openFile'], openFile: vi.fn() }
           : name === 'sessions' ? sessions
           : name === 'workspaces' ? workspaces
+          : name === 'uiWorkspace' ? uiWorkspace
           : undefined),
       } as unknown as TabComponentProps['ctx'],
     })
@@ -305,12 +327,13 @@ describe('PlanView delegation (execute in a new conversation)', () => {
 
   it('settles delegated, creates in the planning workspace, queues the kickoff, and navigates there', async () => {
     const { sessions, calls } = sessionsStub()
+    const nav = uiWorkspaceStub()
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
     stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
-    render(createElement(PlanView, propsWithSessions(sessions, workspacesStub([
+    render(createElement(PlanView, propsWithServices(sessions, workspacesStub([
       { workspaceId: 'ws-other', sessionIds: ['s0'] },
       { workspaceId: 'ws-1', sessionIds: ['s1', 's9'] },
-    ]))))
+    ]), nav.uiWorkspace)))
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Execute in new chat'))
     await screen.findByText('Plan approved — execution continues in a new conversation.')
@@ -319,68 +342,100 @@ describe('PlanView delegation (execute in a new conversation)', () => {
     expect(JSON.parse(String(init.body))).toEqual({ session: 's1', decision: 'approve_new_session', locale: 'en', id: 'r1' })
     // The new conversation joins the planning session's workspace group (a
     // cwd-only create would attach no workspace — the ungrouped-session
-    // regression): workspaceId only, no cwd, kickoff anchored on the plan
-    // path, then navigation.
+    // regression): workspaceId only, no cwd. The kickoff runs inside a
+    // retained reference (create alone leaves the session unaddressable),
+    // anchored on the plan path, then the uiWorkspace navigation.
     expect(calls.created).toEqual([{ workspaceId: 'ws-1' }])
+    expect(calls.using).toEqual([{ id: 's2', source: 'betterPlanDelegation' }])
     expect(calls.prompts).toHaveLength(1)
     expect(calls.prompts[0]?.mode).toBe('queue')
     expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
     expect(calls.prompts[0]?.text).toContain('[Plan execution]')
-    expect(calls.opened).toEqual(['s2'])
+    expect(nav.navigations).toEqual(['s2'])
     expect(reviewStore.get()?.status).toBe('delegated')
   })
 
   it('falls back to the planning session cwd when it belongs to no workspace', async () => {
     const { sessions, calls } = sessionsStub()
+    const nav = uiWorkspaceStub()
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
     stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
-    render(createElement(PlanView, propsWithSessions(sessions, workspacesStub([
+    render(createElement(PlanView, propsWithServices(sessions, workspacesStub([
       { workspaceId: 'ws-1', sessionIds: ['s0'] },
-    ]))))
+    ]), nav.uiWorkspace)))
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Execute in new chat'))
     await screen.findByText('Plan approved — execution continues in a new conversation.')
     expect(calls.created).toEqual([{ cwd: '/from-list' }])
-    expect(calls.opened).toEqual(['s2'])
+    expect(nav.navigations).toEqual(['s2'])
   })
 
   it('falls back to the cwd without a workspaces service too', async () => {
     const { sessions, calls } = sessionsStub()
+    const nav = uiWorkspaceStub()
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
     stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
-    render(createElement(PlanView, propsWithSessions(sessions)))
+    render(createElement(PlanView, propsWithServices(sessions, undefined, nav.uiWorkspace)))
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Execute in new chat'))
     await screen.findByText('Plan approved — execution continues in a new conversation.')
     expect(calls.created).toEqual([{ cwd: '/from-list' }])
-    expect(calls.opened).toEqual(['s2'])
+    expect(nav.navigations).toEqual(['s2'])
+  })
+
+  it('still queues the kickoff when the uiWorkspace navigation service is absent', async () => {
+    const { sessions, calls } = sessionsStub()
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithServices(sessions)))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    await screen.findByText('Plan approved — execution continues in a new conversation.')
+    expect(calls.prompts).toHaveLength(1)
+    expect(screen.queryByText(/Failed to start the execution conversation/)).toBeNull()
   })
 
   it('surfaces a launch failure under the delegated status line', async () => {
     const { sessions } = sessionsStub(new Error('workspace gone'))
+    const nav = uiWorkspaceStub()
     reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
     stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
-    render(createElement(PlanView, propsWithSessions(sessions)))
+    render(createElement(PlanView, propsWithServices(sessions, undefined, nav.uiWorkspace)))
     await screen.findByText(/Review this plan here/)
     fireEvent.click(screen.getByText('Execute in new chat'))
     expect(await screen.findByText('Failed to start the execution conversation: workspace gone')).toBeDefined()
     expect(screen.getByText('Plan approved — execution continues in a new conversation.')).toBeDefined()
-    expect(sessions.open).not.toHaveBeenCalled()
+    expect(sessions.using).not.toHaveBeenCalled()
+    expect(nav.navigations).toEqual([])
+  })
+
+  it('reports a new session that failed its initial open (no kickoff, no navigation)', async () => {
+    const { sessions, calls } = sessionsStub(undefined, 'error')
+    const nav = uiWorkspaceStub()
+    reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
+    stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
+    render(createElement(PlanView, propsWithServices(sessions, undefined, nav.uiWorkspace)))
+    await screen.findByText(/Review this plan here/)
+    fireEvent.click(screen.getByText('Execute in new chat'))
+    expect(await screen.findByText(/Failed to start the execution conversation: the new session "s2" did not open/)).toBeDefined()
+    expect(calls.prompts).toHaveLength(0)
+    expect(nav.navigations).toEqual([])
   })
 
   it('localizes the zh delegation copy end to end', async () => {
     attachLocale({ getSnapshot: () => ({ active: 'zh' }) })
     try {
       const { sessions, calls } = sessionsStub()
+      const nav = uiWorkspaceStub()
       reviewStore.set({ id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'pending' })
       stubReviewFetch({ ok: true, review: { id: 'r1', path: '/repo/meta.md', title: 'The plan', status: 'delegated' } })
-      render(createElement(PlanView, propsWithSessions(sessions)))
+      render(createElement(PlanView, propsWithServices(sessions, undefined, nav.uiWorkspace)))
       expect(await screen.findByText(/在此审阅计划/)).toBeDefined()
       fireEvent.click(screen.getByText('新开对话执行'))
       await screen.findByText('计划已批准——执行已移交到新对话。')
       expect(calls.prompts[0]?.text).toContain('[计划执行]')
       expect(calls.prompts[0]?.text).toContain('/repo/meta.md')
-      expect(calls.opened).toEqual(['s2'])
+      expect(nav.navigations).toEqual(['s2'])
     } finally {
       attachLocale(undefined)
     }

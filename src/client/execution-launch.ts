@@ -6,17 +6,29 @@
  *
  * The faces below are STRUCTURAL (the minimal subset of
  * `@deepseek-ai/dsh-api-session-controller/client`'s `ISessions` /
- * `SessionFace` and `@deepseek-ai/dsh-api-workspace-controller/client`'s
- * `IWorkspaces` this flow calls) — the same pattern better-sidebar uses for
+ * `SessionReference` / `SessionFace` and `@deepseek-ai/dsh-client-ui-workspace`'s
+ * `UiWorkspace` this flow calls) — the same pattern better-sidebar uses for
  * cross-plugin services: no value import crosses the client-bundle purity
  * gate and no new tsconfig path is needed; the runtime services arrive
- * through the context proxy. The new conversation lands in the SAME
- * workspace as the planning session when the workspaces service can resolve
- * it (`create({ workspaceId })` groups the session and derives its cwd from
- * the workspace path — a cwd-only create attaches no workspace, which is
- * exactly how an ungrouped execution conversation happens); otherwise it
- * falls back to the planning session's list-summary cwd, then to the
- * default location.
+ * through the context proxy.
+ *
+ * Addressing rules (session-controller since its references rework):
+ * `create()` only catalogues the session — the local generation becomes
+ * addressable once a caller retains it. The kickoff therefore runs inside
+ * `sessions.using(newId, …)`, which retains the session, awaits its initial
+ * open, and releases the reference after the callback settles. Navigation is
+ * NOT a sessions-service verb: `openSession` belongs to the uiWorkspace
+ * service (it re-retains with source `mainView` and selects the
+ * conversation), so it is a separate optional face. Navigating inside the
+ * `using` callback hands the session from our reference to the main view
+ * before release — no teardown/reopen round-trip.
+ *
+ * The new conversation lands in the SAME workspace as the planning session
+ * when the workspaces service can resolve it (`create({ workspaceId })`
+ * groups the session and derives its cwd from the workspace path — a
+ * cwd-only create attaches no workspace, which is exactly how an ungrouped
+ * execution conversation happens); otherwise it falls back to the planning
+ * session's list-summary cwd, then to the default location.
  *
  * @module @huanlin/dsh-plugin-better-plan/client/execution-launch
  */
@@ -29,24 +41,40 @@ export interface PromptOutcome {
   error?: { code?: string; message?: string }
 }
 
-/** The structural session face the kickoff needs (the `prompt` verb). */
+/** The structural session face the kickoff needs (`getSnapshot` + `prompt`). */
 export interface ExecutionSessionFace {
+  /** The lifecycle read side; only the open settlement fields matter here. */
+  getSnapshot(): { openState: string; openError?: { code?: string; message?: string } | null }
   prompt(
     content: { type: 'text'; text: string }[],
     mode: 'queue',
   ): Promise<PromptOutcome>
 }
 
+/** The structural retained-reference face the kickoff consumes. */
+export interface ExecutionReferenceFace {
+  readonly sessionId: string
+  readonly binding: { session: ExecutionSessionFace }
+}
+
 /** The structural `ctx.sessions` face the delegation flow consumes. */
 export interface SessionsServiceFace {
-  /** Create a blank session (grouped under `workspaceId`'s workspace, in `cwd`, or default). */
+  /** Create a blank session (grouped under `workspaceId`'s workspace, in `cwd`, or default). The returned id is catalogued but not yet retained. */
   create(opts?: { workspaceId?: string; cwd?: string }): Promise<string>
-  /** Select a session as the current conversation. */
-  open(id: string): void
+  /** Retain a session, await its initial open, run the operation, then release. */
+  using<T>(
+    id: string,
+    options: { source: string },
+    operation: (reference: ExecutionReferenceFace) => T | Promise<T>,
+  ): Promise<T>
   /** The session list snapshot (the planning session's cwd source). */
   list: { getSnapshot(): { byId: Record<string, { cwd?: string } | undefined> } }
-  /** The live session face for a locally addressable session. */
-  binding(id: string): { session: ExecutionSessionFace } | undefined
+}
+
+/** The structural `ctx.uiWorkspace` face the delegation flow consumes. */
+export interface UiWorkspaceFace {
+  /** Select a session as the main conversation (re-retains it for the main view). */
+  openSession(id: string): void
 }
 
 /** The structural `ctx.workspaces` face the delegation flow consumes. */
@@ -66,12 +94,16 @@ export interface WorkspacesServiceFace {
  * @param sessions - the sessions service (`ctx.get('sessions')`).
  * @param workspaces - the workspaces service (`ctx.get('workspaces')`), or
  *   undefined when absent (the cwd fallback takes over).
+ * @param uiWorkspace - the workspace navigation service
+ *   (`ctx.get('uiWorkspace')`), or undefined when absent (the kickoff is
+ *   still queued; the new conversation waits in the sidebar list).
  * @param planPath - the approved plan file's absolute path.
  * @param sessionId - the planning session (its workspace/cwd seeds the new one).
  */
 export async function launchExecutionConversation(
   sessions: SessionsServiceFace,
   workspaces: WorkspacesServiceFace | undefined,
+  uiWorkspace: UiWorkspaceFace | undefined,
   planPath: string,
   sessionId: string,
 ): Promise<void> {
@@ -88,16 +120,25 @@ export async function launchExecutionConversation(
     createOpts = cwd === undefined ? {} : { cwd }
   }
   const newId = await sessions.create(createOpts)
-  const binding = sessions.binding(newId)
-  if (binding === undefined) {
-    throw new Error(`the new session "${newId}" is not locally addressable yet`)
-  }
-  const admitted = await binding.session.prompt(
-    [{ type: 'text', text: executionKickoffPrompt(planPath) }],
-    'queue',
-  )
-  if (!admitted.ok) {
-    throw new Error(`the kickoff prompt was rejected: ${admitted.error?.code ?? 'unknown'}: ${admitted.error?.message ?? ''}`)
-  }
-  sessions.open(newId)
+  // `create` only catalogues the session; `using` retains it (making the
+  // binding addressable), settles the initial open, and releases afterwards.
+  await sessions.using(newId, { source: 'betterPlanDelegation' }, async (reference) => {
+    const session = reference.binding.session
+    const state = session.getSnapshot()
+    if (state.openState !== 'open') {
+      const failure = state.openError
+      throw new Error(`the new session "${newId}" did not open: ${failure?.code ?? 'unknown'}: ${failure?.message ?? ''}`)
+    }
+    const admitted = await session.prompt(
+      [{ type: 'text', text: executionKickoffPrompt(planPath) }],
+      'queue',
+    )
+    if (!admitted.ok) {
+      throw new Error(`the kickoff prompt was rejected: ${admitted.error?.code ?? 'unknown'}: ${admitted.error?.message ?? ''}`)
+    }
+    // Navigate while our reference still holds the session: the main-view
+    // retain inside openSession takes over before `using` releases, so the
+    // fresh session never tears down between kickoff and navigation.
+    uiWorkspace?.openSession(newId)
+  })
 }

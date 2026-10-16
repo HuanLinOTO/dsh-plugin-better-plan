@@ -152,15 +152,15 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
     return decision
   })
 
-  // The delivery push route. The web runtime's trusted-host list is optional:
-  // without it the fence accepts loopback hosts only, which still serves the
-  // default local deployment.
+  // The delivery push route. The web startup service's trusted-host list is
+  // optional: without it the fence accepts loopback hosts only, which still
+  // serves the default local deployment.
   ctx.effect(
     () => registerDeliveryRoute(
       (route) => ctx.webServer.registerUpgrade(route),
       registry,
       reviewGate,
-      ctx.get('webRuntime')?.trustedHosts ?? [],
+      ctx.get('webStartup')?.trustedHosts ?? [],
       locales,
     ),
     'dsh-plugin-better-plan: delivery WebSocket',
@@ -172,7 +172,7 @@ export function createBetterPlan(ctx: Context, config: BetterPlanConfig): { regi
     () => registerReviewRoute(
       (route) => ctx.webServer.register(route),
       reviewGate,
-      ctx.get('webRuntime')?.trustedHosts ?? [],
+      ctx.get('webStartup')?.trustedHosts ?? [],
       locales,
     ),
     'dsh-plugin-better-plan: review API route',

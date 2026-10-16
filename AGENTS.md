@@ -57,7 +57,7 @@ pnpm run bundle:client # 仅重打 client bundle（快速 client 迭代）
 - **client 半纯度门**：client bundle 禁止 value-import 其他插件/宿主内部模块。better-sidebar 的交互全部走 `ctx.betterSidebar` 方法；`markdownTextProps` 双形状逻辑内联在 `src/client/markdown-props.ts`（勿改成 import）。`ctx.locale` 只需 type-only import（`@deepseek-ai/dsh-client-locale/client`）拉 Context merge——运行时经 context proxy 取服务，无 value import。
 - **交付推送 seed 不带 path**：better-sidebar v0.19+ 原生右栏把带 `path` 的 openTab 一律改道文件资源打开（editor 认领 `dsh-resource://file/**`），Plan tab 不出现——计划路径只放 `meta.path`（`planPathOf` 优先读 meta）；旧自绘面靠 `updateTab`（`features.includes('updateTab')` gate）+ `activateTab` 刷新/聚焦（原生面上二者按 dockkit tab id 键控、对 `TAB_ID` 是无害 no-op）。重复交付写同一约定文件名时原生页面去重不刷新已挂载记录的 meta，PlanView 以新审批 id 作为重读触发。`meta.path` 随 tab 持久化，刷新后按 `meta.path` 重读。
 - **文件读取走 better-sidebar 路由**：PlanView 用 `POST /sidebar/api/fs.read`（同源、浏览器已鉴权）；本插件不建自有 HTTP 读路由。
-- **WS 栅栏**：`/better-plan/ws/delivery` 过 `isTrustedDeliveryRequest`（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname）。`webRuntime` 为 optional 注入（`ctx.get`），缺席时仅回环可连。
+- **WS 栅栏**：`/better-plan/ws/delivery` 过 `isTrustedDeliveryRequest`（Host 回环 / trustedHosts / sec-fetch-site / Origin hostname）。`webStartup` 为 optional 注入（`ctx.get`），缺席时仅回环可连。
 
 ## 文件职责
 

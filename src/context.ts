@@ -37,8 +37,8 @@ export interface BetterPlanWebServer {
   register(route: BetterPlanHttpRoute): () => void
 }
 
-/** The web runtime trust list (bind-derived; absent on non-web hosts). */
-export interface BetterPlanWebRuntime {
+/** The web startup trust list (`webStartup` service; absent on non-web hosts). */
+export interface BetterPlanWebStartup {
   trustedHosts: readonly string[]
 }
 
@@ -64,8 +64,8 @@ export interface BetterPlanUserQuestions {
 export interface BetterPlanContextShape {
   /** The host webserver (upgrade routes). */
   webServer: BetterPlanWebServer
-  /** The web runtime trust list (optional: non-web hosts have none). */
-  webRuntime?: BetterPlanWebRuntime
+  /** The web startup trust list (optional: non-web hosts have none). */
+  webStartup?: BetterPlanWebStartup
   /** The user-questions seam (optional: review degrades without it). */
   userQuestions?: BetterPlanUserQuestions
   /** The session-persistence service (optional: cwd fallback source). */

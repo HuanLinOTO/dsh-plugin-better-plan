@@ -7,9 +7,11 @@ import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 import { SESSION_FORMAT_VERSION } from '@deepseek-ai/dsh-session/types'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import UserQuestionService, { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
@@ -91,6 +93,10 @@ async function mountCore(answer?: AnswerFactory): Promise<{
   })
   await ctx.plugin(SystemPrompt)
   await ctx.plugin(ToolRuntime)
+  // 0.2.2-rc.1: execution moved to an explicit executor plugin.
+  await ctx.plugin(NativeToolExecutor)
+  // 0.2.2-rc.1: AgentRegistry owns its projections and requires the registry.
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(UserQuestionService)
   const asked: AskUserQuestionRequest[] = []
@@ -154,19 +160,26 @@ async function agentWithSession(
 
 let callCounter = 0
 
-function callExit(
+async function callExit(
   harness: Harness,
   agent: Agent | undefined,
   path: string,
   signal = new AbortController().signal,
 ) {
-  return harness.ctx.tools.execute({
-    callId: ToolCallId(`call-exit-${++callCounter}`),
-    name: EXIT_PLAN_MODE,
-    arguments: { path },
+  // 0.2.2-rc.1: execute() takes a batch and returns { results }.
+  const batch = await harness.ctx.tools.execute({
+    calls: [{
+      type: 'tool-call',
+      id: ToolCallId(`call-exit-${++callCounter}`),
+      name: EXIT_PLAN_MODE,
+      arguments: JSON.stringify({ path }),
+    }],
     signal,
     ...agent !== undefined ? { agent } : {},
   })
+  const first = batch.results[0]
+  if (first === undefined) throw new Error('exit tool produced no result')
+  return first.result
 }
 
 /** Drive one accepted pre-step boundary (the loop's flip flush point). */
@@ -175,7 +188,14 @@ async function boundary(harness: Harness, agent: Agent & { session: Session }): 
   const message = { id: 'm', role: 'user', content: [{ type: 'text', text: 'probe' }], source: { kind: 'user' } } as unknown as UserMessage
   await events.waterfall(
     'agent/pre-step',
-    { messages: [message], turn: 1, step: 1, signal: new AbortController().signal },
+    {
+      messages: [message],
+      turn: 1,
+      step: 1,
+      // 0.2.2-rc.1: the loop fixes the step selection before pre-step.
+      modelSelection: { provider: 'test-provider', model: 'test-model' },
+      signal: new AbortController().signal,
+    },
     () => Promise.resolve({ kind: 'enter' as const, messages: [message] }),
   )
 }

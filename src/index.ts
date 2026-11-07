@@ -40,6 +40,15 @@
  */
 
 import type { Agent } from '@deepseek-ai/dsh-agent'
+// Type-only: declares the plugin-owned steering message source.
+import type {} from '@deepseek-ai/dsh-llm'
+
+declare module '@deepseek-ai/dsh-llm' {
+  interface MessageSourceMap {
+    /** Plan-review decisions steered back by this plugin (never user-authored). */
+    'better-plan/steer': { kind: 'better-plan/steer' }
+  }
+}
 import type { Session } from '@deepseek-ai/dsh-session'
 import { EXIT_PLAN_MODE } from '@deepseek-ai/dsh-plan-mode'
 import { isPlanModeActive } from './plan-fold.ts'

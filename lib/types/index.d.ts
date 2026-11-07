@@ -38,6 +38,14 @@
  *
  * @module @huanlin/dsh-plugin-better-plan
  */
+declare module '@deepseek-ai/dsh-llm' {
+    interface MessageSourceMap {
+        /** Plan-review decisions steered back by this plugin (never user-authored). */
+        'better-plan/steer': {
+            kind: 'better-plan/steer';
+        };
+    }
+}
 import type { Context } from './context.ts';
 import { type BetterPlanConfig } from './config.ts';
 import { PlanDeliveryRegistry } from './delivery-registry.ts';

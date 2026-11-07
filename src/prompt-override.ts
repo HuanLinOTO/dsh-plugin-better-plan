@@ -26,7 +26,7 @@
  */
 
 import type { Context as CordisContext } from '@deepseek-ai/cordis'
-import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type { PromptPresentation } from '@deepseek-ai/dsh-system-prompt'
 
 /**
  * The shipped preset's delivery sentence, verbatim across the standard, ptc,
@@ -125,7 +125,7 @@ export function rewritePlanPolicySection(text: string, planDir: string): string 
  * @returns the listener disposer (for the caller's lifecycle effect).
  */
 export function registerPlanPolicyOverride(ctx: CordisContext, planDir: string): () => void {
-  return ctx.on('system-prompt/assemble', async (assembly: PromptAssembly, _context, next) => {
+  return ctx.on('system-prompt/assemble', async (assembly: PromptPresentation, _context, next) => {
     const result = await next()
     for (const section of result.sections) {
       if (section.text.includes(PLAN_DELIVERY_ANCHOR) || section.text.includes(FINAL_CALL_ANCHOR)) {

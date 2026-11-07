@@ -239,7 +239,10 @@ export function defineExitPlanTool(deps: ShadowToolDeps): ToolDefinition {
       const steerDecision = (text: string): void => {
         agent.steer(createUserMessage({
           content: [{ type: 'text' as const, text }],
-          source: { kind: 'user' as const },
+          // Agent-authored steering is not a user instruction: with
+          // 0.2.2's Auto review, `kind: 'user'` would let plugin text
+          // authorize medium-risk actions.
+          source: { kind: 'better-plan/steer' as const },
         }))
       }
       if (delivered) {
